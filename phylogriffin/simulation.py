@@ -444,16 +444,18 @@ def download_representative_pdbs(
             },
             "return_type": "entry",
             "request_options": {
-                "results_content_type": ["experimental"],
+                "paginate": {
+                    "start": 0,
+                    "rows": n_structures,
+                },
                 "sort": [{"sort_by": "rcsb_entry_info.resolution_combined", "direction": "asc"}],
-                "results_max": 1000,
             },
         }
 
         response = requests.post(query_url, json=query_json, timeout=30)
         response.raise_for_status()
         result = response.json()
-        pdb_ids = [r["identifier"] for r in result.get("result_set", [])[:1000]]
+        pdb_ids = [r["identifier"] for r in result.get("result_set", [])]
         print(f"RCSB search returned {len(pdb_ids)} PDB IDs")
     except Exception as e:
         print(f"RCSB API search failed: {e}. Using hardcoded list.")
