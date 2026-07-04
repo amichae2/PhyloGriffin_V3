@@ -587,9 +587,14 @@ def generate_sequences_with_proteinmpnn(
     all_fa_files = []
     for T_dir in [os.path.join(temp_dir, f"T_{T}") for T in temperatures]:
         if os.path.isdir(T_dir):
-            for fname in os.listdir(T_dir):
-                if fname.endswith(".fa"):
-                    all_fa_files.append(os.path.join(T_dir, fname))
+            seqs_dir = os.path.join(T_dir, "seqs")
+            search_dirs = [T_dir]
+            if os.path.isdir(seqs_dir):
+                search_dirs.append(seqs_dir)
+            for search_dir in search_dirs:
+                for fname in os.listdir(search_dir):
+                    if fname.endswith(".fa"):
+                        all_fa_files.append(os.path.join(search_dir, fname))
 
     pdb_id = os.path.splitext(os.path.basename(pdb_path))[0]
     with open(output_fasta_path, "w") as outf:
