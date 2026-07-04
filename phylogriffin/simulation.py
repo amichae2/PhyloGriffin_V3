@@ -10,6 +10,7 @@ import torch
 import os
 import json
 import time
+import shutil
 import subprocess
 from typing import Tuple, List, Dict, Optional, Iterator
 from collections import defaultdict
@@ -556,11 +557,15 @@ def generate_sequences_with_proteinmpnn(
     temp_dir = os.path.join(os.path.dirname(output_fasta_path), "mpnn_temp")
     os.makedirs(temp_dir, exist_ok=True)
 
+    pdb_input_dir = os.path.join(temp_dir, "input_pdbs")
+    os.makedirs(pdb_input_dir, exist_ok=True)
+    shutil.copy(pdb_path, os.path.join(pdb_input_dir, os.path.basename(pdb_path)))
+
     jsonl_path = os.path.join(temp_dir, f"{os.path.basename(pdb_path)}.jsonl")
 
     try:
         subprocess.run(
-            ["python", parse_script, "--input_path", pdb_path, "--output_path", jsonl_path],
+            ["python", parse_script, "--input_path", pdb_input_dir, "--output_path", jsonl_path],
             check=True, capture_output=True, timeout=120,
         )
     except subprocess.CalledProcessError as e:
@@ -624,6 +629,10 @@ def generate_sequences_with_proteinmpnn(
             pass
     try:
         os.remove(jsonl_path)
+    except OSError:
+        pass
+    try:
+        shutil.rmtree(pdb_input_dir)
     except OSError:
         pass
 
