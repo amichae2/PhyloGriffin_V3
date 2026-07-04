@@ -177,9 +177,8 @@ class PreGeneratedDataset(Dataset):
         self.model = model
         self.alpha = alpha
         self.include_trees = include_trees
-        self.split = split
-        self.train_val_test = train_val_test
         self.seed = seed
+        self._rng = np.random.default_rng(seed)
 
         from .simulation import build_pregen_index
         self.pregen_index = build_pregen_index(pregen_dir)
@@ -191,8 +190,8 @@ class PreGeneratedDataset(Dataset):
         from .simulation import random_training_example
 
         seed = self.seed + idx if self.seed is not None else None
-        n_leaves = np.random.randint(self.n_leaves_range[0], self.n_leaves_range[1] + 1)
-        n_sites = np.random.randint(self.n_sites_range[0], self.n_sites_range[1] + 1)
+        n_leaves = int(self._rng.integers(self.n_leaves_range[0], self.n_leaves_range[1] + 1))
+        n_sites = int(self._rng.integers(self.n_sites_range[0], self.n_sites_range[1] + 1))
 
         msa, seq_names, tree_newick, backbone_id = random_training_example(
             self.pregen_index,
@@ -213,6 +212,55 @@ class PreGeneratedDataset(Dataset):
             result["backbone_id"] = backbone_id
 
         return result
+
+
+class PreGeneratedSubproblemDataset(PreGeneratedDataset):
+    def __init__(self, *args, max_leaves: int = 1500, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_leaves = max_leaves
+
+    def __getitem__(self, idx):
+        result = super().__getitem__(idx)
+        msa = result["msa"]
+        mask = result["mask"]
+        N = msa.shape[0]
+        if N > self.max_leaves:
+            indices = torch.randperm(N)[:self.max_leaves]
+            msa = msa[indices]
+            mask = mask[indices]
+        else:
+            indices = torch.arange(N)
+        return {
+            "sub_msa": msa,
+            "sub_mask": mask,
+            "true_tree": result.get("tree_newick", ""),
+            "leaf_indices": indices,
+        }
+
+
+class _MSATreeDataset(Dataset):
+    def __init__(self, msa_dir, tree_dir, alphabet="protein"):
+        self.msa_dir = msa_dir
+        self.tree_dir = tree_dir
+        self.alphabet = alphabet
+        self.files = sorted([
+            f for f in os.listdir(msa_dir)
+            if f.endswith(".fa") or f.endswith(".fasta") or f.endswith(".aln")
+        ])
+
+    def __len__(self):
+        return len(self.files)
+
+    def _load_msa_and_tree(self, idx):
+        base = os.path.splitext(self.files[idx])[0]
+        base = base.replace("msa_", "")
+        msa_path = os.path.join(self.msa_dir, self.files[idx])
+        tree_path = os.path.join(self.tree_dir, f"tree_{base}.nwk")
+        msa, leaf_names = load_msa(msa_path, self.alphabet)
+        mask = (msa != 21).bool()
+        with open(tree_path) as f:
+            tree_newick = f.read().strip()
+        return msa, mask, leaf_names, tree_newick
 
 
 class MSADataset(Dataset):
@@ -238,34 +286,11 @@ class MSADataset(Dataset):
         return {"msa": msa, "mask": mask}
 
 
-class ContrastiveDataset(Dataset):
-    def __init__(self, msa_dir: str, tree_dir: str, alphabet: str = "protein"):
-        self.msa_dir = msa_dir
-        self.tree_dir = tree_dir
-        self.alphabet = alphabet
-        self.files = sorted([
-            f for f in os.listdir(msa_dir)
-            if f.endswith(".fa") or f.endswith(".fasta") or f.endswith(".aln")
-        ])
-
-    def __len__(self) -> int:
-        return len(self.files)
-
+class ContrastiveDataset(_MSATreeDataset):
     def __getitem__(self, idx: int) -> Dict:
-        base = os.path.splitext(self.files[idx])[0]
-        base = base.replace("msa_", "")
-        msa_path = os.path.join(self.msa_dir, self.files[idx])
-        tree_path = os.path.join(self.tree_dir, f"tree_{base}.nwk")
-
-        msa, leaf_names = load_msa(msa_path, self.alphabet)
-        mask = (msa != 21).bool()
-
-        with open(tree_path, "r") as f:
-            tree_newick = f.read().strip()
-
+        msa, mask, leaf_names, tree_newick = self._load_msa_and_tree(idx)
         from .tree_utils import patristic_distances
         pairwise_distances = patristic_distances(tree_newick, msa.shape[0])
-
         return {
             "msa": msa,
             "mask": mask,
@@ -275,36 +300,12 @@ class ContrastiveDataset(Dataset):
         }
 
 
-class GraphDataset(Dataset):
-    def __init__(self, msa_dir: str, tree_dir: str, alphabet: str = "protein"):
-        self.msa_dir = msa_dir
-        self.tree_dir = tree_dir
-        self.alphabet = alphabet
-        self.files = sorted([
-            f for f in os.listdir(msa_dir)
-            if f.endswith(".fa") or f.endswith(".fasta") or f.endswith(".aln")
-        ])
-
-    def __len__(self) -> int:
-        return len(self.files)
-
+class GraphDataset(_MSATreeDataset):
     def __getitem__(self, idx: int) -> Dict:
-        base = os.path.splitext(self.files[idx])[0]
-        base = base.replace("msa_", "")
-        msa_path = os.path.join(self.msa_dir, self.files[idx])
-        tree_path = os.path.join(self.tree_dir, f"tree_{base}.nwk")
-
-        msa, leaf_names = load_msa(msa_path, self.alphabet)
-        mask = (msa != 21).bool()
-
-        with open(tree_path, "r") as f:
-            tree_newick = f.read().strip()
-
+        msa, mask, leaf_names, tree_newick = self._load_msa_and_tree(idx)
         from .tree_utils import patristic_distances, newick_to_splits
-
         pairwise_distances = patristic_distances(tree_newick, msa.shape[0])
         splits = newick_to_splits(tree_newick, msa.shape[0])
-
         return {
             "msa": msa,
             "mask": mask,
@@ -315,33 +316,14 @@ class GraphDataset(Dataset):
         }
 
 
-class SubproblemDataset(Dataset):
+class SubproblemDataset(_MSATreeDataset):
     def __init__(self, msa_dir: str, tree_dir: str, max_leaves: int = 1500,
                  alphabet: str = "protein"):
-        self.msa_dir = msa_dir
-        self.tree_dir = tree_dir
+        super().__init__(msa_dir, tree_dir, alphabet)
         self.max_leaves = max_leaves
-        self.alphabet = alphabet
-        self.files = sorted([
-            f for f in os.listdir(msa_dir)
-            if f.endswith(".fa") or f.endswith(".fasta") or f.endswith(".aln")
-        ])
-
-    def __len__(self) -> int:
-        return len(self.files)
 
     def __getitem__(self, idx: int) -> Dict:
-        base = os.path.splitext(self.files[idx])[0]
-        base = base.replace("msa_", "")
-        msa_path = os.path.join(self.msa_dir, self.files[idx])
-        tree_path = os.path.join(self.tree_dir, f"tree_{base}.nwk")
-
-        msa, leaf_names = load_msa(msa_path, self.alphabet)
-        mask = (msa != 21).bool()
-
-        with open(tree_path, "r") as f:
-            tree_newick = f.read().strip()
-
+        msa, mask, _, tree_newick = self._load_msa_and_tree(idx)
         N = msa.shape[0]
         if N > self.max_leaves:
             indices = torch.randperm(N)[:self.max_leaves].tolist()
@@ -349,7 +331,6 @@ class SubproblemDataset(Dataset):
             mask = mask[indices]
         else:
             indices = list(range(N))
-
         return {
             "sub_msa": msa,
             "sub_mask": mask,
@@ -358,31 +339,9 @@ class SubproblemDataset(Dataset):
         }
 
 
-class DecomposedTreeDataset(Dataset):
-    def __init__(self, msa_dir: str, tree_dir: str, alphabet: str = "protein"):
-        self.msa_dir = msa_dir
-        self.tree_dir = tree_dir
-        self.alphabet = alphabet
-        self.files = sorted([
-            f for f in os.listdir(msa_dir)
-            if f.endswith(".fa") or f.endswith(".fasta") or f.endswith(".aln")
-        ])
-
-    def __len__(self) -> int:
-        return len(self.files)
-
+class DecomposedTreeDataset(_MSATreeDataset):
     def __getitem__(self, idx: int) -> Dict:
-        base = os.path.splitext(self.files[idx])[0]
-        base = base.replace("msa_", "")
-        msa_path = os.path.join(self.msa_dir, self.files[idx])
-        tree_path = os.path.join(self.tree_dir, f"tree_{base}.nwk")
-
-        msa, leaf_names = load_msa(msa_path, self.alphabet)
-        mask = (msa != 21).bool()
-
-        with open(tree_path, "r") as f:
-            tree_newick = f.read().strip()
-
+        msa, mask, leaf_names, tree_newick = self._load_msa_and_tree(idx)
         from .tree_utils import parse_newick, get_leaf_order
 
         leaf_order = get_leaf_order(tree_newick)
@@ -405,35 +364,17 @@ class DecomposedTreeDataset(Dataset):
         }
 
 
-class ErrorTreeDataset(Dataset):
-    def __init__(self, msa_dir: str, tree_dir: str, alphabet: str = "protein"):
-        self.msa_dir = msa_dir
-        self.tree_dir = tree_dir
-        self.alphabet = alphabet
-        self.files = sorted([
-            f for f in os.listdir(msa_dir)
-            if f.endswith(".fa") or f.endswith(".fasta") or f.endswith(".aln")
-        ])
-
-    def __len__(self) -> int:
-        return len(self.files)
+class ErrorTreeDataset(_MSATreeDataset):
+    def __init__(self, msa_dir, tree_dir, alphabet="protein", n_nni_swaps=3):
+        super().__init__(msa_dir, tree_dir, alphabet)
+        self.n_nni_swaps = n_nni_swaps
 
     def __getitem__(self, idx: int) -> Dict:
-        from .tree_utils import patristic_distances
-
-        base = os.path.splitext(self.files[idx])[0]
-        base = base.replace("msa_", "")
-        msa_path = os.path.join(self.msa_dir, self.files[idx])
-        tree_path = os.path.join(self.tree_dir, f"tree_{base}.nwk")
-
-        msa, _ = load_msa(msa_path, self.alphabet)
-        mask = (msa != 21).bool()
-
-        with open(tree_path, "r") as f:
-            true_tree = f.read().strip()
-
+        msa, mask, _, true_tree = self._load_msa_and_tree(idx)
+        from .tree_utils import corrupt_tree
+        corrupted = corrupt_tree(true_tree, n_swaps=self.n_nni_swaps, seed=idx)
         return {
-            "corrupted_tree": true_tree,
+            "corrupted_tree": corrupted,
             "true_tree": true_tree,
             "msa": msa,
             "mask": mask,

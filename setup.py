@@ -10,5 +10,8 @@ setup(
         "scipy>=1.10.0",
         "dendropy>=4.6.0",
         "tqdm>=4.65.0",
+        "matplotlib>=3.7.0",
+        "pyvolve>=1.1.0",
+        "requests>=2.28.0",
     ],
 )

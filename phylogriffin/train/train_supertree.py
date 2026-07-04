@@ -102,18 +102,17 @@ def train_supertree(
                     subtrees.append((chunk_indices, chunk_tree))
 
             try:
-                reconciled = supertree(subtrees, guide_tree, seq_emb)
+                reconciled, intermediates = supertree(subtrees, guide_tree, seq_emb)
             except Exception:
                 reconciled = true_tree
+                intermediates = None
 
-            from ..tree_utils import robinson_foulds, newick_to_splits
-
-            try:
-                true_splits = newick_to_splits(true_tree, N)
-                inf_splits = newick_to_splits(reconciled, N)
-                rf = robinson_foulds(true_splits, inf_splits)
-                loss = torch.tensor(rf, device=device, requires_grad=True)
-            except Exception:
+            if intermediates is not None:
+                try:
+                    loss = supertree.compute_loss(intermediates, true_tree, N, device)
+                except Exception:
+                    loss = torch.zeros(1, device=device, requires_grad=True)
+            else:
                 loss = torch.zeros(1, device=device, requires_grad=True)
 
             optimizer.zero_grad()

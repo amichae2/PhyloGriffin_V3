@@ -422,11 +422,17 @@ class ColumnProcessor(nn.Module):
             self.layers = self._original_layers
         self._compiled = False
 
-    def forward(
+    def _batched_titans(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        N, L, d = x.shape
+        x_flat = x.view(N * L, d)
+        mask_flat = mask.view(N * L)
+        return self.titans(x_flat, mask_flat).view(N, L, d)
+
+    def forward_hidden(
         self,
         msa: torch.LongTensor,
         mask: Optional[torch.BoolTensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         if msa.ndim == 3:
             B, N, L = msa.shape
             msa = msa.view(B * N, L)
@@ -450,6 +456,7 @@ class ColumnProcessor(nn.Module):
 
         if self._compiled:
             x = self.layers(x, mask)
+            x = self._batched_titans(x, mask)
         else:
             for layer in self.layers:
                 x = layer(x, mask)
@@ -460,6 +467,29 @@ class ColumnProcessor(nn.Module):
                     x[:, t, :] = self.titans(col, col_mask)
 
         x = self.final_norm(x)
+        return x
+
+    def forward(
+        self,
+        msa: torch.LongTensor,
+        mask: Optional[torch.BoolTensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if msa.ndim == 3:
+            B, N, L = msa.shape
+            batched = True
+            store_shape = (B, N, L)
+        elif msa.ndim == 2:
+            batched = False
+            N, L = msa.shape
+        else:
+            raise ValueError(f"Expected 2D or 3D MSA, got {msa.ndim}D")
+
+        x = self.forward_hidden(msa, mask)
+
+        if mask is None:
+            mask = msa != self.config.pad_idx
+        if mask.ndim == 3:
+            mask = mask.view(-1, L)
 
         mask_float = mask.float().unsqueeze(-1)
         valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1).float()

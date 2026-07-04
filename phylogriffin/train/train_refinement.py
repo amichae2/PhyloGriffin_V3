@@ -59,17 +59,8 @@ def train_refinement(
                     continue
 
                 try:
-                    refined = refinement(corrupted_trees[b], emb)
-                except Exception:
-                    refined = true_trees[b]
-
-                from ..tree_utils import robinson_foulds, newick_to_splits
-
-                try:
-                    true_splits = newick_to_splits(true_trees[b], n)
-                    ref_splits = newick_to_splits(refined, n)
-                    rf = robinson_foulds(true_splits, ref_splits)
-                    loss = torch.tensor(rf, device=device, requires_grad=True)
+                    refined, intermediates = refinement(corrupted_trees[b], emb)
+                    loss = refinement.compute_loss(intermediates, true_trees[b], emb, device)
                     total_loss += loss
                     valid_count += 1
                 except Exception:

@@ -27,12 +27,11 @@ def train_contrastive(
     temperature = 0.1
     triplet_margin = 0.5
 
-    for layer in model.griffin_layers[:6]:
+    n_freeze = min(6, len(model.layers))
+    for i, layer in enumerate(model.layers):
+        requires_grad = i >= n_freeze
         for p in layer.parameters():
-            p.requires_grad = False
-    for layer in model.griffin_layers[6:]:
-        for p in layer.parameters():
-            p.requires_grad = True
+            p.requires_grad = requires_grad
 
     if model.titans is not None:
         for p in model.titans.parameters():

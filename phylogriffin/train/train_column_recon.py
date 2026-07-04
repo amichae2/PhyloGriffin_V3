@@ -70,35 +70,9 @@ def train_column_reconstruction(
                     random_tokens = torch.randint(0, alphabet_size, (n_random,), device=device)
                     masked_msa[b][mask_pos & replace_with_random[b]] = random_tokens
 
-            seq_emb, _ = model(masked_msa, mask)
+            hidden = model.forward_hidden(masked_msa, mask)
 
-            x = model.token_embed(masked_msa)
-            mask_copy = mask
-
-            if model.titans is not None:
-                model.titans.reset_state()
-
-            for layer_idx, layer in enumerate(model.griffin_layers):
-                if layer.is_recurrent:
-                    x_temporal = model.rg_lru[layer.rg_lru_idx](x, mask_copy)
-                else:
-                    x_temporal = model.local_attn[layer.attn_idx](x, mask_copy)
-
-                x = model.rmsnorms[layer_idx](x + x_temporal)
-
-                if model.titans is not None:
-                    for t in range(L):
-                        col = x[:, :, t, :]
-                        col_mask = mask_copy[:, :, t]
-                        x[:, :, t, :] = model.titans(col, col_mask)
-
-                x = model.rmsnorms_mlp[layer_idx](x + model.mlps[layer_idx](x))
-
-            logits = torch.zeros(B, N, L, alphabet_size, device=device)
-
-            for b in range(B):
-                logits_b = mask_head(x[b])
-                logits[b, :, :logits_b.shape[1]] = logits_b
+            logits = mask_head(hidden)
 
             loss = F.cross_entropy(
                 logits[mask_positions].view(-1, alphabet_size),

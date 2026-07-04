@@ -97,10 +97,12 @@ class RefinementPass(nn.Module):
             d_model=config.griffin.d_model,
         )
 
-    def forward(self, tree_newick: str, seq_embeddings: torch.Tensor) -> str:
+    def forward(self, tree_newick: str, seq_embeddings: torch.Tensor):
         tree = parse_newick(tree_newick)
         leaf_names = get_leaf_order(tree_to_newick(tree))
         leaf_to_idx = {name: i for i, name in enumerate(leaf_names)}
+
+        quartet_scores_list = []
 
         for _ in range(self.config.refinement.n_rounds):
             quartets = self._get_internal_nodes(tree)
@@ -119,13 +121,17 @@ class RefinementPass(nn.Module):
                 emb_c = seq_embeddings[c_indices].mean(dim=0)
                 emb_d = seq_embeddings[d_indices].mean(dim=0)
 
-                scores = self._score_quartet(emb_a, emb_b, emb_c, emb_d)
+                scores = self.quartet_scorer(emb_a, emb_b, emb_c, emb_d)
+                quartet_scores_list.append(scores.detach() if not self.training else scores)
                 best_idx = scores.argmax(dim=-1).item()
 
                 if best_idx != 0 and scores[best_idx] > scores[0] + self.config.refinement.nni_margin:
                     self._apply_nni_swap(node, c1, c2, best_idx)
 
-        return tree_to_newick(tree)
+        intermediates = {
+            "quartet_scores": torch.stack(quartet_scores_list) if quartet_scores_list else torch.zeros(0, 3, device=seq_embeddings.device),
+        }
+        return tree_to_newick(tree), intermediates
 
     def _score_quartet(
         self,
@@ -196,3 +202,12 @@ class RefinementPass(nn.Module):
             d_node.parent = c1
             c2.children[1] = b_node
             b_node.parent = c2
+
+    def compute_loss(self, intermediates, true_tree_newick, seq_embeddings, device):
+        quartet_scores = intermediates["quartet_scores"]
+        if quartet_scores.numel() == 0:
+            return torch.zeros(1, device=device, requires_grad=True)
+        target = torch.zeros_like(quartet_scores)
+        target[:, 0] = 1.0
+        loss = F.cross_entropy(quartet_scores, target.argmax(dim=-1))
+        return loss

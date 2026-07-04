@@ -56,8 +56,10 @@ class PhyloGriffinV3(nn.Module):
         self._compiled = False
 
     def forward(self, msa: torch.Tensor, mask: Optional[torch.Tensor] = None,
-                chunk_size: int = 5000) -> str:
-        return infer_tree(msa, [], self.config, self, chunk_size=chunk_size)
+                seq_names: Optional[List[str]] = None, chunk_size: int = 5000) -> str:
+        if seq_names is None:
+            seq_names = [str(i) for i in range(msa.shape[0])]
+        return infer_tree(msa, seq_names, self.config, self, chunk_size=chunk_size)
 
     def compile(self, mode: str = "reduce-overhead", dynamic: bool = True) -> "PhyloGriffinV3":
         compile_model(self, mode=mode, dynamic=dynamic)
@@ -158,8 +160,8 @@ def infer_tree(
         subtree = model.diffusion.generate(sub_msa, sub_emb)
         subtrees.append((idxs, subtree))
 
-    full_tree = model.supertree(subtrees, guide_tree, seq_embeddings)
+    full_tree, _ = model.supertree(subtrees, guide_tree, seq_embeddings)
 
-    full_tree = model.refinement(full_tree, seq_embeddings)
+    full_tree, _ = model.refinement(full_tree, seq_embeddings)
 
     return full_tree

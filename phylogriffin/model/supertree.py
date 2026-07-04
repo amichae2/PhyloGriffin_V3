@@ -246,7 +246,14 @@ class SupertreeReconciler(nn.Module):
         global_tree_newick = self._reconcile(
             subtrees, branch_scales, stay_probs, affinity_scores, guide_tree_newick
         )
-        return global_tree_newick
+
+        intermediates = {
+            "branch_scales": branch_scales,
+            "stay_probs": stay_probs,
+            "affinity_scores": affinity_scores,
+            "subtree_tokens": x,
+        }
+        return global_tree_newick, intermediates
 
     def _encode_subtree(self, subtree_newick: str, n_leaves: int) -> torch.Tensor:
         tree = parse_newick(subtree_newick)
@@ -406,3 +413,18 @@ class SupertreeReconciler(nn.Module):
             grafted = self._graft_onto_guide(child, subtrees, counter)
             new_node.children.append(grafted)
         return new_node
+
+    def compute_loss(self, intermediates, true_tree_newick, n_leaves, device):
+        branch_scales = intermediates["branch_scales"]
+        loss_scale = F.mse_loss(branch_scales, torch.ones_like(branch_scales))
+
+        affinity = intermediates["affinity_scores"]
+        loss_symmetry = F.mse_loss(affinity, affinity.t())
+
+        stay_probs = intermediates["stay_probs"]
+        loss_stay = F.binary_cross_entropy(
+            stay_probs.clamp(1e-6, 1 - 1e-6),
+            torch.ones_like(stay_probs)
+        )
+
+        return loss_scale + 0.1 * loss_symmetry + 0.1 * loss_stay

@@ -402,7 +402,8 @@ HARDCODED_PDB_IDS = [
 ]
 
 AA_ORDER = "ARNDCQEGHILKMFPSTWYV"
-AA_TO_IDX = {aa: i for i, aa in enumerate(AA_ORDER)}
+from .data import AA_TO_IDX as _DATA_AA_TO_IDX
+AA_TO_IDX = _DATA_AA_TO_IDX
 
 
 def download_representative_pdbs(
@@ -519,8 +520,8 @@ def generate_sequences_with_proteinmpnn(
         temperatures = [0.2, 0.5]
 
     candidates = [
-        "/content/ProteinMPNN/protein_mpnn_run.py",
         os.path.join(os.environ.get("PROTEINMPNN_PATH", ""), "protein_mpnn_run.py"),
+        "/content/ProteinMPNN/protein_mpnn_run.py",
         "/content/ProteinMPNN",
     ]
 

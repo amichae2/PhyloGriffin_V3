@@ -141,40 +141,6 @@ def _leaf_index_map(node: TreeNode, idx: int = 0) -> Tuple[Dict[str, int], int]:
     return mapping, idx
 
 
-def _collect_splits(node: TreeNode, leaf_to_idx: Dict[str, int],
-                     n_leaves: int) -> List[Tuple[np.ndarray, float]]:
-    splits = []
-    if node.is_leaf or len(node.children) == 0:
-        return splits
-
-    stack = [(node, False)]
-    child_splits: List[Tuple[np.ndarray, float]] = []
-    while stack:
-        current, visited = stack.pop()
-        if current.is_leaf:
-            continue
-        if visited:
-            mask = np.zeros(n_leaves, dtype=bool)
-            for child in current.children:
-                if child.is_leaf:
-                    mask[leaf_to_idx[child.name]] = True
-                else:
-                    for prev_mask, _ in child_splits[len(splits):]:
-                        mask = mask | prev_mask
-            splits.append((mask, current.branch_length))
-        else:
-            stack.append((current, True))
-            for child in reversed(current.children):
-                stack.append((child, False))
-
-    distinct = []
-    for mask, blen in splits:
-        n_true = mask.sum()
-        if n_true > 1 and n_true < n_leaves - 1:
-            distinct.append((mask, blen))
-    return distinct
-
-
 def newick_to_splits(newick_str: str, n_leaves: int) -> List[Tuple[np.ndarray, float]]:
     tree = parse_newick(newick_str)
     leaf_to_idx, _ = _leaf_index_map(tree)
@@ -321,12 +287,6 @@ def patristic_distances(tree_newick: str, n_leaves: int) -> np.ndarray:
         for child in node.children:
             _compute_distances(child, bl_above + node.branch_length)
 
-    all_pairs = _get_pairs(tree)
-    for i in range(len(all_pairs)):
-        for j in range(i + 1, len(all_pairs)):
-            a, _ = all_pairs[i]
-            b, _ = all_pairs[j]
-
     _compute_distances(tree)
     return dist
 
@@ -346,14 +306,36 @@ def get_leaf_order(newick_str: str) -> List[str]:
     return leaves
 
 
-def nni_alternatives(tree: TreeNode, internal_node: TreeNode) -> List[TreeNode]:
-    if internal_node.is_leaf or len(internal_node.children) < 2:
-        return [tree, tree, tree]
-    return [tree, tree, tree]
+def corrupt_tree(newick_str: str, n_swaps: int = 3, seed: int = None) -> str:
+    if seed is not None:
+        np.random.seed(seed)
+    tree = parse_newick(newick_str)
 
+    internal_nodes: List[TreeNode] = []
+    def _collect(node):
+        if not node.is_leaf and len(node.children) == 2:
+            c1, c2 = node.children
+            if not c1.is_leaf and not c2.is_leaf:
+                if len(c1.children) == 2 and len(c2.children) == 2:
+                    internal_nodes.append(node)
+        for child in node.children:
+            _collect(child)
+    _collect(tree)
 
-def apply_nni(tree_newick: str, node_id: int, alternative: int) -> str:
-    return tree_newick
+    if not internal_nodes:
+        return newick_str
+
+    for _ in range(n_swaps):
+        node = internal_nodes[np.random.randint(len(internal_nodes))]
+        c1, c2 = node.children
+        b_node = c1.children[1]
+        c_node = c2.children[0]
+        c1.children[1] = c_node
+        c_node.parent = c1
+        c2.children[0] = b_node
+        b_node.parent = c2
+
+    return tree_to_newick(tree)
 
 
 def is_binary(tree_newick: str) -> bool:
