@@ -238,6 +238,40 @@ class PreGeneratedSubproblemDataset(PreGeneratedDataset):
         }
 
 
+class PreGeneratedDecomposedDataset(PreGeneratedDataset):
+    def __getitem__(self, idx):
+        result = super().__getitem__(idx)
+        tree = result.get("tree_newick", "")
+        return {
+            "msa": result["msa"],
+            "mask": result["mask"],
+            "true_tree": tree,
+            "subproblems": [],
+            "guide_tree": tree,
+        }
+
+
+class PreGeneratedErrorTreeDataset(PreGeneratedDataset):
+    def __init__(self, *args, d_model: int = 256, n_nni_swaps: int = 3, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.d_model = d_model
+        self.n_nni_swaps = n_nni_swaps
+
+    def __getitem__(self, idx):
+        result = super().__getitem__(idx)
+        true_tree = result.get("tree_newick", "")
+        from .tree_utils import corrupt_tree
+        corrupted = corrupt_tree(true_tree, n_swaps=self.n_nni_swaps, seed=idx)
+        msa = result["msa"]
+        return {
+            "corrupted_tree": corrupted,
+            "true_tree": true_tree,
+            "msa": msa,
+            "mask": result["mask"],
+            "embeddings": torch.zeros(msa.shape[0], self.d_model),
+        }
+
+
 class _MSATreeDataset(Dataset):
     def __init__(self, msa_dir, tree_dir, alphabet="protein"):
         self.msa_dir = msa_dir

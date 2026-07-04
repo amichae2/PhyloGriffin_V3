@@ -133,6 +133,28 @@ def test_refinement_forward():
     refined, intermediates = model(tree, emb)
     assert isinstance(refined, str)
     assert "quartet_scores" in intermediates
+    assert "quartet_metadata" in intermediates
+    loss = model.compute_loss(intermediates, tree, emb, "cpu")
+    assert isinstance(loss, torch.Tensor)
+    assert loss.requires_grad
+
+
+def test_refinement_loss_gradient():
+    config = PhyloGriffinConfig()
+    config.refinement.quartet_hidden = 64
+    config.griffin.d_model = 64
+    model = RefinementPass(config)
+    tree = "((A:0.1,B:0.2):0.3,(C:0.4,D:0.5):0.6);"
+    emb = torch.randn(4, 64)
+    refined, intermediates = model(tree, emb)
+    true_tree = "((A:0.1,C:0.4):0.3,(B:0.2,D:0.5):0.6);"
+    loss = model.compute_loss(intermediates, true_tree, emb, "cpu")
+    loss.backward()
+    has_grad = any(
+        p.grad is not None and p.grad.abs().sum() > 0
+        for p in model.parameters()
+    )
+    assert has_grad, "RefinementPass.compute_loss should produce non-zero gradients"
 
 
 def test_inference_wiring():
@@ -158,7 +180,8 @@ if __name__ == "__main__":
         test_rf_distance, test_column_processor_forward,
         test_column_processor_batched, test_graph_predictor,
         test_simulation, test_corrupt_tree, test_supertree_forward,
-        test_refinement_forward, test_inference_wiring,
+        test_refinement_forward, test_refinement_loss_gradient,
+        test_inference_wiring,
     ]
     passed = 0
     for test_fn in tests:

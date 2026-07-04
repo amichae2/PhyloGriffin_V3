@@ -19,6 +19,47 @@ from ..tree_utils import (
 )
 
 
+def _determine_quartet_topology(
+    true_tree: "TreeNode",
+    a_set: set,
+    b_set: set,
+    c_set: set,
+    d_set: set,
+) -> int:
+    def _get_leaf_set(node: "TreeNode") -> set:
+        if node.is_leaf:
+            return {node.name}
+        leaves = set()
+        for child in node.children:
+            leaves.update(_get_leaf_set(child))
+        return leaves
+
+    def _is_clade(tree: "TreeNode", group: set) -> bool:
+        if not group:
+            return False
+
+        def _find(node: "TreeNode") -> bool:
+            if node.is_leaf:
+                return group == {node.name}
+            leaves = _get_leaf_set(node)
+            if leaves == group:
+                return True
+            for child in node.children:
+                if _find(child):
+                    return True
+            return False
+
+        return _find(tree)
+
+    if _is_clade(true_tree, a_set | b_set) or _is_clade(true_tree, c_set | d_set):
+        return 0
+    if _is_clade(true_tree, a_set | c_set) or _is_clade(true_tree, b_set | d_set):
+        return 1
+    if _is_clade(true_tree, a_set | d_set) or _is_clade(true_tree, b_set | c_set):
+        return 2
+    return 0
+
+
 class QuartetScorer(nn.Module):
     """
     MLP that takes embeddings from 4 subtrees and scores topologies.
@@ -103,6 +144,7 @@ class RefinementPass(nn.Module):
         leaf_to_idx = {name: i for i, name in enumerate(leaf_names)}
 
         quartet_scores_list = []
+        quartet_metadata_list = []
 
         for _ in range(self.config.refinement.n_rounds):
             quartets = self._get_internal_nodes(tree)
@@ -122,7 +164,8 @@ class RefinementPass(nn.Module):
                 emb_d = seq_embeddings[d_indices].mean(dim=0)
 
                 scores = self.quartet_scorer(emb_a, emb_b, emb_c, emb_d)
-                quartet_scores_list.append(scores.detach() if not self.training else scores)
+                quartet_scores_list.append(scores if self.training else scores.detach())
+                quartet_metadata_list.append((a_set, b_set, c_set, d_set))
                 best_idx = scores.argmax(dim=-1).item()
 
                 if best_idx != 0 and scores[best_idx] > scores[0] + self.config.refinement.nni_margin:
@@ -130,6 +173,7 @@ class RefinementPass(nn.Module):
 
         intermediates = {
             "quartet_scores": torch.stack(quartet_scores_list) if quartet_scores_list else torch.zeros(0, 3, device=seq_embeddings.device),
+            "quartet_metadata": quartet_metadata_list,
         }
         return tree_to_newick(tree), intermediates
 
@@ -207,7 +251,23 @@ class RefinementPass(nn.Module):
         quartet_scores = intermediates["quartet_scores"]
         if quartet_scores.numel() == 0:
             return torch.zeros(1, device=device, requires_grad=True)
-        target = torch.zeros_like(quartet_scores)
-        target[:, 0] = 1.0
-        loss = F.cross_entropy(quartet_scores, target.argmax(dim=-1))
-        return loss
+
+        quartet_metadata = intermediates.get("quartet_metadata", [])
+        if not quartet_metadata or len(quartet_metadata) != quartet_scores.shape[0]:
+            target = torch.zeros_like(quartet_scores)
+            target[:, 0] = 1.0
+            return F.cross_entropy(quartet_scores, target.argmax(dim=-1))
+
+        try:
+            true_tree = parse_newick(true_tree_newick)
+        except Exception:
+            target = torch.zeros_like(quartet_scores)
+            target[:, 0] = 1.0
+            return F.cross_entropy(quartet_scores, target.argmax(dim=-1))
+
+        targets = []
+        for a_set, b_set, c_set, d_set in quartet_metadata:
+            targets.append(_determine_quartet_topology(true_tree, a_set, b_set, c_set, d_set))
+
+        target = torch.tensor(targets, dtype=torch.long, device=quartet_scores.device)
+        return F.cross_entropy(quartet_scores, target)
