@@ -156,6 +156,21 @@ def test_refinement_loss_gradient():
     )
     assert has_grad, "RefinementPass.compute_loss should produce non-zero gradients"
 
+    quartet_metadata = intermediates.get("quartet_metadata", [])
+    leaf_to_idx = intermediates.get("leaf_to_idx", {})
+    from phylogriffin.model.refinement import _determine_quartet_topology
+    from phylogriffin.tree_utils import parse_newick
+    true_tree_parsed = parse_newick(true_tree)
+    if quartet_metadata:
+        a_set, b_set, c_set, d_set = quartet_metadata[0]
+        topology = _determine_quartet_topology(
+            true_tree_parsed, a_set, b_set, c_set, d_set, leaf_to_idx
+        )
+        assert topology == 1, (
+            f"Expected topology 1 for quartet ((A,B),(C,D)) with true tree "
+            f"((A,C),(B,D)), got {topology}"
+        )
+
 
 def test_inference_wiring():
     config = PhyloGriffinConfig()

@@ -25,7 +25,18 @@ def _determine_quartet_topology(
     b_set: set,
     c_set: set,
     d_set: set,
+    leaf_to_idx: dict,
 ) -> int:
+    idx_to_name = {v: k for k, v in leaf_to_idx.items()}
+
+    def _to_names(s):
+        return {idx_to_name.get(i, str(i)) for i in s}
+
+    a_names = _to_names(a_set)
+    b_names = _to_names(b_set)
+    c_names = _to_names(c_set)
+    d_names = _to_names(d_set)
+
     def _get_leaf_set(node: "TreeNode") -> set:
         if node.is_leaf:
             return {node.name}
@@ -34,28 +45,21 @@ def _determine_quartet_topology(
             leaves.update(_get_leaf_set(child))
         return leaves
 
-    def _is_clade(tree: "TreeNode", group: set) -> bool:
+    def _is_clade(node: "TreeNode", group: set) -> bool:
         if not group:
             return False
-
-        def _find(node: "TreeNode") -> bool:
-            if node.is_leaf:
-                return group == {node.name}
-            leaves = _get_leaf_set(node)
-            if leaves == group:
+        if _get_leaf_set(node) == group:
+            return True
+        for child in node.children:
+            if _is_clade(child, group):
                 return True
-            for child in node.children:
-                if _find(child):
-                    return True
-            return False
+        return False
 
-        return _find(tree)
-
-    if _is_clade(true_tree, a_set | b_set) or _is_clade(true_tree, c_set | d_set):
+    if _is_clade(true_tree, a_names | b_names) or _is_clade(true_tree, c_names | d_names):
         return 0
-    if _is_clade(true_tree, a_set | c_set) or _is_clade(true_tree, b_set | d_set):
+    if _is_clade(true_tree, a_names | c_names) or _is_clade(true_tree, b_names | d_names):
         return 1
-    if _is_clade(true_tree, a_set | d_set) or _is_clade(true_tree, b_set | c_set):
+    if _is_clade(true_tree, a_names | d_names) or _is_clade(true_tree, b_names | c_names):
         return 2
     return 0
 
@@ -174,6 +178,7 @@ class RefinementPass(nn.Module):
         intermediates = {
             "quartet_scores": torch.stack(quartet_scores_list) if quartet_scores_list else torch.zeros(0, 3, device=seq_embeddings.device),
             "quartet_metadata": quartet_metadata_list,
+            "leaf_to_idx": leaf_to_idx,
         }
         return tree_to_newick(tree), intermediates
 
@@ -253,6 +258,7 @@ class RefinementPass(nn.Module):
             return torch.zeros(1, device=device, requires_grad=True)
 
         quartet_metadata = intermediates.get("quartet_metadata", [])
+        leaf_to_idx = intermediates.get("leaf_to_idx", {})
         if not quartet_metadata or len(quartet_metadata) != quartet_scores.shape[0]:
             target = torch.zeros_like(quartet_scores)
             target[:, 0] = 1.0
@@ -267,7 +273,9 @@ class RefinementPass(nn.Module):
 
         targets = []
         for a_set, b_set, c_set, d_set in quartet_metadata:
-            targets.append(_determine_quartet_topology(true_tree, a_set, b_set, c_set, d_set))
+            targets.append(_determine_quartet_topology(
+                true_tree, a_set, b_set, c_set, d_set, leaf_to_idx
+            ))
 
         target = torch.tensor(targets, dtype=torch.long, device=quartet_scores.device)
         return F.cross_entropy(quartet_scores, target)
