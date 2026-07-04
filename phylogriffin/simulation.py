@@ -487,7 +487,12 @@ def download_representative_pdbs(
                 r.raise_for_status()
 
                 content = r.text
-                chain_length = content.count("CA ") + content.count("CA\n")
+                chain_length = 0
+                for line in content.splitlines():
+                    if (line.startswith("ATOM") and
+                        len(line) >= 16 and
+                        line[12:16].strip() == "CA"):
+                        chain_length += 1
                 if length_min <= chain_length <= length_max:
                     with open(pdb_path, "w") as f:
                         f.write(content)
