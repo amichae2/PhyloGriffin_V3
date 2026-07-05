@@ -755,6 +755,87 @@ def _compute_consensus(sequences: List[str]) -> str:
     return "".join(consensus)
 
 
+def _evolve_from_root_vectorized(
+    tree_newick: str,
+    root_seq: np.ndarray,
+    model: str = "JTT",
+    alpha: float = 1.0,
+    n_categories: int = 4,
+    seed: Optional[int] = None,
+) -> Tuple[np.ndarray, List[str]]:
+    if seed is not None:
+        np.random.seed(seed)
+
+    from .tree_utils import parse_newick, get_leaf_order
+
+    if model == "JTT":
+        Q = jtt_rate_matrix()
+    elif model == "WAG":
+        Q = wag_rate_matrix()
+    elif model == "LG":
+        Q = lg_rate_matrix()
+    else:
+        Q = jtt_rate_matrix()
+
+    n_sites = len(root_seq)
+    eigvals, eigvecs = np.linalg.eigh(Q)
+    eigvals = eigvals.real
+    eigvecs_inv = np.linalg.inv(eigvecs)
+
+    rate_multipliers = np.ones(n_sites)
+    if alpha < float("inf") and alpha > 0:
+        shape_param = alpha
+        scale_param = 1.0 / alpha
+        categories = np.random.choice(n_categories, size=n_sites, replace=True)
+        for c in range(n_categories):
+            rate_multipliers[categories == c] = np.random.gamma(shape_param, scale_param)
+
+    leaf_names = get_leaf_order(tree_newick)
+    n_leaves = len(leaf_names)
+    tree = parse_newick(tree_newick)
+
+    unique_rates = np.unique(rate_multipliers)
+    leaf_to_seq = {}
+
+    def _simulate_subtree(node, parent_seq):
+        if node.is_leaf:
+            leaf_to_seq[node.name] = parent_seq.copy()
+            return
+        for child in node.children:
+            bl = child.branch_length
+            if bl <= 0:
+                _simulate_subtree(child, parent_seq)
+                continue
+
+            child_seq = np.zeros(n_sites, dtype=np.int32)
+            for r in unique_rates:
+                mask = (rate_multipliers == r)
+                if not mask.any():
+                    continue
+                diag = np.exp(eigvals * bl * r)
+                P = (eigvecs * diag) @ eigvecs_inv
+                P = np.real(P)
+                P = np.maximum(P, 0)
+                P = P / P.sum(axis=1, keepdims=True)
+
+                parent_states = parent_seq[mask]
+                probs = P[parent_states]
+                cumsum = np.cumsum(probs, axis=1)
+                rand = np.random.random(len(parent_states))
+                child_states = (rand[:, None] < cumsum).argmax(axis=1)
+                child_seq[mask] = child_states
+
+            _simulate_subtree(child, child_seq)
+
+    _simulate_subtree(tree, root_seq)
+
+    msa = np.zeros((n_leaves, n_sites), dtype=np.int32)
+    for i, name in enumerate(leaf_names):
+        msa[i] = leaf_to_seq.get(name, root_seq.copy())
+
+    return msa, leaf_names
+
+
 def evolve_sequences_from_pool(
     fasta_pool_path: str,
     n_leaves: int,
@@ -808,83 +889,22 @@ def evolve_sequences_from_pool(
     leaf_names = [f"seq_{i}" for i in range(n_leaves)]
 
     try:
-        from pyvolve import Partition, Model, Evolver
-        import pyvolve
-
-        if model == "JTT":
-            matrix = jtt_rate_matrix()
-            if hasattr(pyvolve, "Matrix") and hasattr(pyvolve, "matrix"):
-                try:
-                    from scipy import linalg
-                    eigvals, eigvecs = linalg.eig(matrix)
-                    eigvals = eigvals.real
-                    equilibrium = np.abs(eigvecs[:, 0])
-                    equilibrium = equilibrium / equilibrium.sum()
-                except Exception:
-                    equilibrium = np.ones(20) / 20.0
-            else:
-                equilibrium = np.ones(20) / 20.0
-
-            pyvolve_model = Model(
-                "JTT",
-                {"alpha": alpha, "num_categories": n_categories}
-            )
-        elif model == "WAG":
-            pyvolve_model = Model(
-                "WAG",
-                {"alpha": alpha, "num_categories": n_categories}
-            )
-        elif model == "LG":
-            pyvolve_model = Model(
-                "LG",
-                {"alpha": alpha, "num_categories": n_categories}
-            )
-        else:
-            pyvolve_model = Model(
-                "JTT",
-                {"alpha": alpha, "num_categories": n_categories}
-            )
-
-        partition = Partition(models=pyvolve_model, size=n_sites)
-
-        evolver = Evolver(partitions=partition, tree=parse_newick_pyvolve(tree_newick))
-        evolver()
-
-        leaf_seqs = {}
-        for node in evolver.tree.traverse("postorder"):
-            if node.is_leaf() and hasattr(node, "sequence"):
-                leaf_seqs[node.label] = node.sequence
-
-        for i, name in enumerate(leaf_names):
-            if name in leaf_seqs:
-                seq = leaf_seqs[name]
-                for pos, aa in enumerate(seq[:n_sites]):
-                    if aa in AA_TO_IDX:
-                        msa[i, pos] = AA_TO_IDX[aa]
-                    else:
-                        msa[i, pos] = 20
-
-    except ImportError:
-        pass
+        msa_np, leaf_names = _evolve_from_root_vectorized(
+            tree_newick, ancestral_arr, model, alpha, n_categories, seed
+        )
+        msa = msa_np.astype(np.int64)
     except Exception as e:
-        print(f"Pyvolve evolution failed: {e}, falling back to naive evolution")
+        print(f"Vectorized evolution failed: {e}, falling back to naive evolution")
         msa_result, _ = evolve_sequences(tree_newick, n_sites, model, alpha, n_categories,
                                           include_indels=False, seed=seed)
         msa = msa_result.numpy().astype(np.int32)
+        leaf_names = [f"seq_{i}" for i in range(n_leaves)]
 
     has_valid = (msa <= 19).any()
     if not has_valid:
         msa[:, 0] = np.random.randint(0, 20, size=n_leaves)
 
     return torch.from_numpy(msa.astype(np.int64)), leaf_names, tree_newick
-
-
-def parse_newick_pyvolve(newick_str: str):
-    try:
-        import pyvolve
-        return pyvolve.read_tree(tree=newick_str)
-    except ImportError:
-        raise RuntimeError("pyvolve required for tree parsing")
 
 
 def random_training_example(
