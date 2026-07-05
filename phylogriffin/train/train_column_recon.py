@@ -80,6 +80,10 @@ def train_column_reconstruction(
                 ignore_index=config.pad_idx,
             )
 
+            if torch.isnan(loss) or torch.isinf(loss):
+                optimizer.zero_grad()
+                continue
+
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, config.training.grad_clip)

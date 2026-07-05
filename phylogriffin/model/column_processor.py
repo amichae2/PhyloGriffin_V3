@@ -53,7 +53,7 @@ class RG_LRU(nn.Module):
         log_a = self.c * r * F.logsigmoid(self.Lambda)
         a = torch.exp(log_a).clamp(0, 1)
 
-        h = a * state + torch.sqrt(1.0 - a * a) * (i * x_proj)
+        h = a * state + torch.sqrt(1.0 - a * a + 1e-6) * (i * x_proj)
         y = self.output_proj(h)
 
         return y, h
@@ -132,7 +132,7 @@ class ParallelRG_LRU(nn.Module):
         log_a = self.c * r * F.logsigmoid(self.Lambda)
         a = torch.exp(log_a).clamp(0, 1)
 
-        input_term = torch.sqrt(1.0 - a * a) * (i * x_rnn_conv)
+        input_term = torch.sqrt(1.0 - a * a + 1e-6) * (i * x_rnn_conv)
 
         h_seq = self._run_scan(a, input_term)
 
