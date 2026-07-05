@@ -461,11 +461,6 @@ class ColumnProcessor(nn.Module):
             for layer in self.layers:
                 x = layer(x, mask)
 
-                for t in range(L):
-                    col = x[:, t, :]
-                    col_mask = mask[:, t]
-                    x[:, t, :] = self.titans(col, col_mask)
-
         x = self.final_norm(x)
         return x
 

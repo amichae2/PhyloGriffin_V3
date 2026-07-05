@@ -847,15 +847,8 @@ def evolve_sequences_from_pool(
 
         partition = Partition(models=pyvolve_model, size=n_sites)
 
-        root_aa = []
-        for idx in ancestral_arr:
-            aa_char = AA_ORDER[idx] if idx < 20 else "A"
-            root_aa.append(aa_char)
-        root_seq_str = "".join(root_aa)
-
         evolver = Evolver(partitions=partition, tree=parse_newick_pyvolve(tree_newick))
-        evolver(seqfile=None, ratefile=None, infofile=None)
-        evolver.partitions[0].evolve(root_sequence=root_seq_str)
+        evolver()
 
         leaf_seqs = {}
         for node in evolver.tree.traverse("postorder"):
