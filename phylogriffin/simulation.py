@@ -70,7 +70,8 @@ def simulate_yule_tree(n_leaves: int, birth_rate: float = 1.0,
             return f"{name}:{max(bl, 1e-6):.6f}"
         children = children_map[node]
         child_strs = [_to_newick(c) for c in children]
-        return f"({','.join(child_strs)})"
+        bl = bl_map.get(node, 0.0)
+        return f"({','.join(child_strs)}):{max(bl, 1e-6):.6f}"
 
     if internal_nodes:
         root = internal_nodes[0]
@@ -82,7 +83,7 @@ def simulate_yule_tree(n_leaves: int, birth_rate: float = 1.0,
         return _to_newick(root) + ";"
 
     leaf_names = [leaf_map[lid] for lid in leaf_ids]
-    return f"({','.join(f'{n}:0.001' for n in leaf_names)});"
+    return f"({','.join(f'{n}:0.001' for n in leaf_names)}):0.000001;"
 
 
 def simulate_birth_death_tree(n_leaves: int, birth_rate: float = 1.0,

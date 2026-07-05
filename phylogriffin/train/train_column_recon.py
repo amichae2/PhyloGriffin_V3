@@ -72,7 +72,7 @@ def train_column_reconstruction(
 
             hidden = model.forward_hidden(masked_msa, mask)
 
-            logits = mask_head(hidden)
+            logits = mask_head(hidden).view(B, N, L, alphabet_size)
 
             loss = F.cross_entropy(
                 logits[mask_positions].view(-1, alphabet_size),
