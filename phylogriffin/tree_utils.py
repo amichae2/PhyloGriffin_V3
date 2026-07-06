@@ -272,20 +272,20 @@ def patristic_distances(tree_newick: str, n_leaves: int) -> np.ndarray:
                 pairs.append((ci, cd + node.branch_length))
         return pairs
 
-    def _compute_distances(node: TreeNode, bl_above: float = 0.0):
+    def _compute_distances(node: TreeNode):
         if node.is_leaf:
             return
         for i in range(len(node.children)):
             for j in range(i + 1, len(node.children)):
-                ci, _ = _get_pairs(node.children[i])
-                cj, _ = _get_pairs(node.children[j])
-                for a, da in ci:
-                    for b, db in cj:
+                pairs_i = _get_pairs(node.children[i])
+                pairs_j = _get_pairs(node.children[j])
+                for a, da in pairs_i:
+                    for b, db in pairs_j:
                         total = da + db
                         dist[a, b] = total
                         dist[b, a] = total
         for child in node.children:
-            _compute_distances(child, bl_above + node.branch_length)
+            _compute_distances(child)
 
     _compute_distances(tree)
     return dist
