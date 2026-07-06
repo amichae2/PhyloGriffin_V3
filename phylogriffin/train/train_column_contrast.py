@@ -92,34 +92,30 @@ def train_contrastive(
                 if len(pos_indices[0]) == 0:
                     continue
 
-                n_pos = len(pos_indices[0])
-                pos_pairs = list(zip(pos_indices[0][:min(n_pos, 500)].tolist(),
-                                      pos_indices[1][:min(n_pos, 500)].tolist()))
+                n_pos = min(len(pos_indices[0]), 500)
 
                 sim_matrix = torch.mm(emb_norm, emb_norm.t()) / temperature
+                exp_sim = torch.exp(sim_matrix)
+                sum_exp = exp_sim.sum(dim=1)
 
-                contrast_loss = 0.0
-                for i, j in pos_pairs:
-                    exp_sim = torch.exp(sim_matrix[i])
-                    contrast_loss += -torch.log(
-                        torch.exp(sim_matrix[i, j]) / (exp_sim.sum() + 1e-8)
-                    )
-                if len(pos_pairs) > 0:
-                    contrast_loss = contrast_loss / len(pos_pairs)
+                pi = pos_indices[0][:n_pos]
+                pj = pos_indices[1][:n_pos]
 
-                triplet_loss = 0.0
-                if len(neg_indices[0]) > 0 and len(pos_indices[0]) > 0:
+                pos_sims = sim_matrix[pi, pj]
+                pos_exp_sums = sum_exp[pi]
+                contrast_loss = -(pos_sims - torch.log(pos_exp_sums + 1e-8)).mean()
+
+                triplet_loss = torch.tensor(0.0, device=device)
+                if len(neg_indices[0]) > 0:
                     n_triplets = min(100, len(pos_indices[0]), len(neg_indices[0]))
-                    for _ in range(n_triplets):
-                        pi = pos_indices[0][_]
-                        pj = pos_indices[1][_]
-                        ni = neg_indices[0][_ % len(neg_indices[0])]
-                        nj = neg_indices[1][_ % len(neg_indices[0])]
+                    pi_t = pos_indices[0][:n_triplets]
+                    pj_t = pos_indices[1][:n_triplets]
+                    ni_t = neg_indices[0][torch.arange(n_triplets) % len(neg_indices[0])]
+                    nj_t = neg_indices[1][torch.arange(n_triplets) % len(neg_indices[0])]
 
-                        d_pos = torch.norm(emb[pi] - emb[pj], p=2)
-                        d_neg = torch.norm(emb[ni] - emb[nj], p=2)
-                        triplet_loss += F.relu(triplet_margin + d_pos - d_neg)
-                    triplet_loss = triplet_loss / n_triplets
+                    d_pos = torch.norm(emb[pi_t] - emb[pj_t], p=2, dim=-1)
+                    d_neg = torch.norm(emb[ni_t] - emb[nj_t], p=2, dim=-1)
+                    triplet_loss = F.relu(triplet_margin + d_pos - d_neg).mean()
 
                 total_loss += contrast_loss + 0.5 * triplet_loss
 
