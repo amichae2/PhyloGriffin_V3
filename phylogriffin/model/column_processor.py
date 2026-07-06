@@ -87,20 +87,7 @@ class ParallelRG_LRU(nn.Module):
 
         self.conv = nn.Conv1d(d_rnn, d_rnn, kernel_size=4, padding=3, groups=d_rnn)
 
-        self._scan_compiled = None
-
-    def _get_compiled_scan(self):
-        if self._scan_compiled is None and hasattr(torch, "compile"):
-            self._scan_compiled = torch.compile(
-                _sequential_scan, fullgraph=True, dynamic=True, mode="reduce-overhead"
-            )
-        return self._scan_compiled
-
     def _run_scan(self, a: torch.Tensor, input_term: torch.Tensor) -> torch.Tensor:
-        if hasattr(torch, "compile"):
-            scan_fn = self._get_compiled_scan()
-            if scan_fn is not None:
-                return scan_fn(a, input_term)
         return _sequential_scan(a, input_term)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
