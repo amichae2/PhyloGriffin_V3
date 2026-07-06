@@ -256,38 +256,69 @@ def robinson_foulds(splits1, splits2) -> float:
 def patristic_distances(tree_newick: str, n_leaves: int) -> np.ndarray:
     tree = parse_newick(tree_newick)
     leaf_to_idx, _ = _leaf_index_map(tree)
-    idx_to_leaf = {v: k for k, v in leaf_to_idx.items()}
+
+    node_list = []
+    node_to_id = {}
+
+    def _assign_ids(node):
+        node_to_id[id(node)] = len(node_list)
+        node_list.append(node)
+        for child in node.children:
+            _assign_ids(child)
+    _assign_ids(tree)
+
+    n_nodes = len(node_list)
+    parent = np.full(n_nodes, -1, dtype=np.int32)
+    bl_to_parent = np.zeros(n_nodes, dtype=np.float64)
+
+    for nid, node in enumerate(node_list):
+        for child in node.children:
+            cid = node_to_id[id(child)]
+            parent[cid] = nid
+            bl_to_parent[cid] = child.branch_length
+
+    leaf_ids = []
+    leaf_indices = []
+    for nid, node in enumerate(node_list):
+        if node.is_leaf and node.name in leaf_to_idx:
+            leaf_ids.append(nid)
+            leaf_indices.append(leaf_to_idx[node.name])
+
+    actual_n = len(leaf_ids)
+    if actual_n == 0:
+        return np.zeros((n_leaves, n_leaves), dtype=np.float32)
+
+    dist_to_root = np.zeros(n_nodes, dtype=np.float64)
+    for nid in range(n_nodes):
+        total_bl = 0.0
+        curr = nid
+        while parent[curr] != -1:
+            total_bl += bl_to_parent[curr]
+            curr = parent[curr]
+        dist_to_root[nid] = total_bl
+
+    leaf_ancestors = []
+    for lid in leaf_ids:
+        ancestors = []
+        curr = lid
+        while curr != -1:
+            ancestors.append(curr)
+            curr = parent[curr]
+        leaf_ancestors.append(set(ancestors))
 
     dist = np.zeros((n_leaves, n_leaves), dtype=np.float32)
+    for i in range(actual_n):
+        for j in range(i + 1, actual_n):
+            common = leaf_ancestors[i] & leaf_ancestors[j]
+            if not common:
+                continue
+            lca = max(common)
+            d = dist_to_root[leaf_ids[i]] + dist_to_root[leaf_ids[j]] - 2.0 * dist_to_root[lca]
+            gi = leaf_indices[i]
+            gj = leaf_indices[j]
+            dist[gi, gj] = d
+            dist[gj, gi] = d
 
-    def _get_pairs(node: TreeNode) -> List[Tuple[int, float]]:
-        if node.is_leaf:
-            if node.name in leaf_to_idx:
-                return [(leaf_to_idx[node.name], node.branch_length)]
-            return []
-        pairs = []
-        for child in node.children:
-            child_pairs = _get_pairs(child)
-            for ci, cd in child_pairs:
-                pairs.append((ci, cd + node.branch_length))
-        return pairs
-
-    def _compute_distances(node: TreeNode):
-        if node.is_leaf:
-            return
-        for i in range(len(node.children)):
-            for j in range(i + 1, len(node.children)):
-                pairs_i = _get_pairs(node.children[i])
-                pairs_j = _get_pairs(node.children[j])
-                for a, da in pairs_i:
-                    for b, db in pairs_j:
-                        total = da + db
-                        dist[a, b] = total
-                        dist[b, a] = total
-        for child in node.children:
-            _compute_distances(child)
-
-    _compute_distances(tree)
     return dist
 
 
