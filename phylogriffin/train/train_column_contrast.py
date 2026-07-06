@@ -63,7 +63,7 @@ def train_contrastive(
 
             seq_emb, _ = model(msa, mask)
 
-            total_loss = 0.0
+            total_loss = torch.tensor(0.0, device=device)
             for b in range(B):
                 n = (mask[b].sum(dim=1) > 0).sum().item()
                 emb = seq_emb[b, :n]
@@ -124,6 +124,9 @@ def train_contrastive(
                 total_loss += contrast_loss + 0.5 * triplet_loss
 
             total_loss = total_loss / B
+
+            if torch.isnan(total_loss) or torch.isinf(total_loss) or total_loss.item() == 0.0:
+                continue
 
             optimizer.zero_grad()
             total_loss.backward()
