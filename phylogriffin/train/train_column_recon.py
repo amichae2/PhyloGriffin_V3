@@ -70,10 +70,9 @@ def train_column_reconstruction(
             mask_positions = torch.rand(B, N, L, device=device) < 0.15
             mask_positions = mask_positions & mask
 
-            replace_with_mask = torch.rand(B, N, L, device=device) < 0.8
-            replace_with_random = (torch.rand(B, N, L, device=device) >= 0.8) & (
-                torch.rand(B, N, L, device=device) < 0.9
-            )
+            rand = torch.rand(B, N, L, device=device)
+            replace_with_mask = rand < 0.8
+            replace_with_random = (rand >= 0.8) & (rand < 0.9)
 
             for b in range(B):
                 mask_pos = mask_positions[b]

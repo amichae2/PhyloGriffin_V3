@@ -234,17 +234,53 @@ def lg_rate_matrix() -> np.ndarray:
     )
 
 
-def gtr_rate_matrix(base_freqs: np.ndarray, exchangeabilities: np.ndarray) -> np.ndarray:
+def jc_rate_matrix() -> np.ndarray:
+    Q = np.full((4, 4), 1.0 / 3.0, dtype=np.float64)
+    np.fill_diagonal(Q, -1.0)
+    return Q
+
+
+def gtr_rate_matrix(base_freqs: np.ndarray, exchange_rates: np.ndarray) -> np.ndarray:
     n = len(base_freqs)
     Q = np.zeros((n, n), dtype=np.float64)
+    idx = 0
     for i in range(n):
-        for j in range(n):
-            if i != j:
-                Q[i, j] = exchangeabilities[i * n + j] * base_freqs[j]
-    row_sums = Q.sum(axis=1)
+        for j in range(i + 1, n):
+            Q[i, j] = exchange_rates[idx] * base_freqs[j]
+            Q[j, i] = exchange_rates[idx] * base_freqs[i]
+            idx += 1
     for i in range(n):
-        Q[i, i] = -row_sums[i]
+        Q[i, i] = -Q[i, :].sum()
+    mu = -np.sum(base_freqs * np.diag(Q))
+    if mu > 0:
+        Q /= mu
     return Q
+
+
+def _discrete_gamma_rates(alpha: float, n_categories: int) -> np.ndarray:
+    from scipy import stats
+
+    if alpha >= 1e6 or n_categories <= 1:
+        return np.ones(n_categories, dtype=np.float64)
+
+    shape = alpha
+    scale = 1.0 / alpha
+
+    bin_probs = np.linspace(0, 1, n_categories + 1)
+    boundaries = stats.gamma.ppf(bin_probs, a=shape, scale=scale)
+
+    rates = np.zeros(n_categories, dtype=np.float64)
+    for i in range(n_categories):
+        lo, hi = boundaries[i], boundaries[i + 1]
+        if hi - lo < 1e-12:
+            rates[i] = lo
+        else:
+            rates[i] = stats.gamma.expect(
+                lambda x: x, args=(shape,), scale=scale, lb=lo, ub=hi, conditional=True
+            )
+
+    rates = rates / rates.mean()
+    return rates
 
 
 try:
@@ -284,9 +320,9 @@ def evolve_sequences(
     elif model == "LG":
         Q = lg_rate_matrix()
     elif model == "JC":
-        Q = gtr_rate_matrix(np.ones(4) / 4, np.ones(4 * 4) * 0.25)
+        Q = jc_rate_matrix()
     elif model == "GTR":
-        Q = gtr_rate_matrix(np.ones(4) / 4, np.ones(4 * 4) * 0.25)
+        Q = jc_rate_matrix()
     else:
         raise ValueError(f"Unknown model: {model}")
 
@@ -300,24 +336,13 @@ def evolve_sequences(
 
     rate_multipliers = np.ones(n_sites)
     if alpha < float("inf") and alpha > 0:
-        shape_param = alpha
-        scale_param = 1.0 / alpha
-        category_bounds = np.array([0.0])
-        for _ in range(1, n_categories):
-            category_bounds = np.append(category_bounds, np.random.gamma(shape_param, scale_param))
-        category_bounds = np.sort(category_bounds)[:n_categories]
-        category_bounds = category_bounds / (category_bounds.sum() / n_categories)
+        rate_categories = _discrete_gamma_rates(alpha, n_categories)
         categories = np.random.choice(n_categories, size=n_sites, replace=True)
-        for c in range(n_categories):
-            mask_c = categories == c
-            rate_multipliers[mask_c] = category_bounds[c]
+        rate_multipliers = rate_categories[categories]
 
     n_leaves = len(leaf_names)
-    {name: np.zeros(n_sites, dtype=np.int32) for name in leaf_names}
 
     root_seq = np.zeros(n_sites, dtype=np.int32)
-    q_diag = -np.diag(Q)
-    Q / q_diag[:, None]
     for site in range(n_sites):
         root_seq[site] = np.random.choice(alphabet_size)
 
@@ -896,11 +921,9 @@ def _evolve_from_root_vectorized(
 
     rate_multipliers = np.ones(n_sites)
     if alpha < float("inf") and alpha > 0:
-        shape_param = alpha
-        scale_param = 1.0 / alpha
+        rate_categories = _discrete_gamma_rates(alpha, n_categories)
         categories = np.random.choice(n_categories, size=n_sites, replace=True)
-        for c in range(n_categories):
-            rate_multipliers[categories == c] = np.random.gamma(shape_param, scale_param)
+        rate_multipliers = rate_categories[categories]
 
     leaf_names = get_leaf_order(tree_newick)
     n_leaves = len(leaf_names)

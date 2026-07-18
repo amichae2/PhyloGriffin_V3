@@ -60,7 +60,7 @@ def train_diffusion(
 
             seq_emb = seq_emb.squeeze(0) if seq_emb.dim() == 3 else seq_emb
 
-            from ..tree_utils import get_leaf_order, newick_to_splits
+            from ..tree_utils import newick_to_splits
 
             n_splits_max = config.diffusion.n_splits_max
             splits = newick_to_splits(true_tree, M)
@@ -76,7 +76,6 @@ def train_diffusion(
                     config.diffusion.branch_length_max,
                 )
 
-            get_leaf_order(true_tree)
             for i in range(M):
                 p_0[i] = 0.1
 

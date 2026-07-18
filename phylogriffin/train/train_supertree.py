@@ -88,7 +88,6 @@ def train_supertree(
                     end = start + chunk_size if k < K - 1 else N
                     chunk_indices = indices[start:end]
                     chunk_msa = msa[chunk_indices]
-                    mask[chunk_indices]
                     chunk_emb = seq_emb[chunk_indices]
                     with torch.no_grad():
                         try:
@@ -100,7 +99,7 @@ def train_supertree(
                     subtrees.append((chunk_indices, chunk_tree))
 
             try:
-                reconciled, intermediates = supertree(subtrees, guide_tree, seq_emb)
+                _, intermediates = supertree(subtrees, guide_tree, seq_emb)
             except Exception:
                 intermediates = None
 
