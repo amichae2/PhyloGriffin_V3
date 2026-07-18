@@ -71,9 +71,6 @@ def train_supertree(
             with torch.no_grad():
                 seq_emb, _ = column_processor(msa, mask)
 
-            from ..tree_utils import get_leaf_order
-
-            get_leaf_order(true_tree)
             n_leaves = N
 
             K = max(2, n_leaves // config.decomposition.max_subproblem_size)

@@ -235,9 +235,10 @@ def lg_rate_matrix() -> np.ndarray:
 
 
 def jc_rate_matrix() -> np.ndarray:
-    Q = np.full((4, 4), 1.0 / 3.0, dtype=np.float64)
-    np.fill_diagonal(Q, -1.0)
-    return Q
+    S = np.full((4, 4), 1.0, dtype=np.float64)
+    np.fill_diagonal(S, 0.0)
+    pi = np.full(4, 0.25, dtype=np.float64)
+    return _build_rate_matrix(S, pi)
 
 
 def gtr_rate_matrix(base_freqs: np.ndarray, exchange_rates: np.ndarray) -> np.ndarray:
