@@ -1,20 +1,22 @@
 """Smoke tests: verify that key modules import and basic operations work."""
 
 import sys
+
 import torch
-import numpy as np
+
 from phylogriffin.config import PhyloGriffinConfig
+from phylogriffin.inference import PhyloGriffinV3
 from phylogriffin.model.column_processor import ColumnProcessor
 from phylogriffin.model.graph_predictor import GraphPredictor
-from phylogriffin.model.diffusion import DiffusionTreeGenerator
-from phylogriffin.model.decomposition import HierarchicalDecomposition
-from phylogriffin.model.supertree import SupertreeReconciler
 from phylogriffin.model.refinement import RefinementPass
-from phylogriffin.inference import PhyloGriffinV3
-from phylogriffin.simulation import simulate_yule_tree, evolve_sequences
+from phylogriffin.model.supertree import SupertreeReconciler
+from phylogriffin.simulation import evolve_sequences, simulate_yule_tree
 from phylogriffin.tree_utils import (
-    parse_newick, tree_to_newick, newick_to_splits,
-    robinson_foulds, corrupt_tree,
+    corrupt_tree,
+    newick_to_splits,
+    parse_newick,
+    robinson_foulds,
+    tree_to_newick,
 )
 
 
@@ -47,6 +49,23 @@ def test_rf_distance():
     assert rf == 0.0
 
 
+def test_rf_distance_different_trees():
+    tree1 = "((A:0.1,B:0.2):0.3,(C:0.4,D:0.5):0.6);"
+    tree2 = "((A:0.1,(B:0.2,C:0.3):0.4):0.5,D:0.6);"
+    splits1 = newick_to_splits(tree1, 4)
+    splits2 = newick_to_splits(tree2, 4)
+    rf = robinson_foulds(splits1, splits2)
+    assert rf > 0.0
+
+
+def test_rf_distance_complement_canonicalization():
+    tree = "((A:0.1,B:0.2):0.3,(C:0.4,D:0.5):0.6);"
+    splits = newick_to_splits(tree, 4)
+    flipped = [(~mask.copy(), bl) for mask, bl in splits]
+    rf = robinson_foulds(splits, flipped)
+    assert rf == 0.0
+
+
 def test_column_processor_forward():
     config = PhyloGriffinConfig()
     config.griffin.d_model = 64
@@ -58,7 +77,7 @@ def test_column_processor_forward():
     config.diffusion.n_splits_max = 100
     model = ColumnProcessor(config)
     msa = torch.randint(0, 20, (4, 30))
-    mask = (msa != config.pad_idx)
+    mask = msa != config.pad_idx
     seq_emb, mem = model(msa, mask)
     assert seq_emb.shape == (4, 64)
     hidden = model.forward_hidden(msa, mask)
@@ -90,6 +109,21 @@ def test_graph_predictor():
     assert (probs >= 0).all() and (probs <= 1).all()
 
 
+def test_build_graph():
+    d_model = 64
+    N = 20
+    k_neighbors = 5
+    gp = GraphPredictor(d_model=d_model, hidden_dims=[128, 64])
+    embeddings = torch.randn(N, d_model)
+    edge_index, edge_weights = gp.build_graph(
+        embeddings, k_neighbors=k_neighbors, edge_threshold=0.0
+    )
+    assert edge_index.shape[1] <= N * k_neighbors
+    if edge_weights.numel() > 0:
+        assert edge_weights.max() <= 1.0
+    assert edge_index.shape[0] == 2
+
+
 def test_simulation():
     tree = simulate_yule_tree(10, seed=42)
     msa, names = evolve_sequences(tree, n_sites=50, model="JTT", seed=42)
@@ -119,7 +153,7 @@ def test_supertree_forward():
     tree, intermediates = model(subtrees, guide_tree, embeddings)
     assert isinstance(tree, str)
     assert "branch_scales" in intermediates
-    loss = model.compute_loss(intermediates, "", 20, "cpu")
+    loss = model.compute_loss(intermediates, "", subtrees, 20, "cpu")
     assert isinstance(loss, torch.Tensor)
 
 
@@ -150,16 +184,14 @@ def test_refinement_loss_gradient():
     true_tree = "((A:0.1,C:0.4):0.3,(B:0.2,D:0.5):0.6);"
     loss = model.compute_loss(intermediates, true_tree, emb, "cpu")
     loss.backward()
-    has_grad = any(
-        p.grad is not None and p.grad.abs().sum() > 0
-        for p in model.parameters()
-    )
+    has_grad = any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters())
     assert has_grad, "RefinementPass.compute_loss should produce non-zero gradients"
 
     quartet_metadata = intermediates.get("quartet_metadata", [])
     leaf_to_idx = intermediates.get("leaf_to_idx", {})
     from phylogriffin.model.refinement import _determine_quartet_topology
     from phylogriffin.tree_utils import parse_newick
+
     true_tree_parsed = parse_newick(true_tree)
     if quartet_metadata:
         a_set, b_set, c_set, d_set = quartet_metadata[0]
@@ -189,14 +221,59 @@ def test_inference_wiring():
     assert hasattr(m, "refinement")
 
 
+def test_end_to_end_inference():
+    config = PhyloGriffinConfig()
+    config.griffin.d_model = 64
+    config.griffin.d_rnn = 85
+    config.griffin.n_layers = 2
+    config.titans.n_memory_slots = 16
+    config.titans.d_mem = 32
+    config.diffusion.n_splits_max = 100
+    config.supertree.d_model = 64
+    config.supertree.n_layers = 1
+    config.supertree.d_feedforward = 128
+
+    model = PhyloGriffinV3(config)
+    model.eval()
+
+    msa = torch.randint(0, 20, (10, 50))
+    mask = msa != config.pad_idx
+    seq_names = [f"seq_{i}" for i in range(10)]
+
+    tree = model(msa, mask=mask, seq_names=seq_names, chunk_size=5000)
+
+    assert isinstance(tree, str)
+    assert tree.startswith("(")
+    assert tree.endswith(";")
+
+    from phylogriffin.tree_utils import get_leaf_order, parse_newick
+
+    parsed = parse_newick(tree)
+    assert parsed is not None
+
+    leaves = get_leaf_order(tree)
+    assert len(leaves) == 10, f"Expected 10 leaves, got {len(leaves)}"
+
+
 if __name__ == "__main__":
     tests = [
-        test_config, test_nucleotide_config, test_newick_round_trip,
-        test_rf_distance, test_column_processor_forward,
-        test_column_processor_batched, test_graph_predictor,
-        test_simulation, test_corrupt_tree, test_supertree_forward,
-        test_refinement_forward, test_refinement_loss_gradient,
+        test_config,
+        test_nucleotide_config,
+        test_newick_round_trip,
+        test_rf_distance,
+        test_rf_distance_different_trees,
+        test_rf_distance_complement_canonicalization,
+        test_column_processor_forward,
+        test_column_processor_batched,
+        test_graph_predictor,
+        test_build_graph,
+        test_simulation,
+        test_corrupt_tree,
+        test_supertree_forward,
+        test_refinement_forward,
+        test_refinement_loss_gradient,
         test_inference_wiring,
+        test_end_to_end_inference,
     ]
     passed = 0
     for test_fn in tests:

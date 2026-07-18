@@ -3,24 +3,27 @@ PhyloGriffin v3 -- Tree utility functions.
 Minimal Newick parser, split extraction, RF distance, patristic distances.
 """
 
-import re
 import numpy as np
-from typing import List, Tuple, Optional, Dict, Any
-from collections import defaultdict
 
 
 class TreeNode:
-    def __init__(self, name: str = "", branch_length: float = 0.0,
-                 support: float = 0.0, is_leaf: bool = False):
+    def __init__(
+        self,
+        name: str = "",
+        branch_length: float = 0.0,
+        support: float = 0.0,
+        is_leaf: bool = False,
+    ):
         self.name = name
         self.branch_length = branch_length
         self.support = support
         self.is_leaf = is_leaf
-        self.children: List["TreeNode"] = []
-        self.parent: Optional["TreeNode"] = None
+        self.children: list[TreeNode] = []
+        self.parent: TreeNode | None = None
+        self.leaf_global_idx: int | None = None
 
 
-def _tokenize_newick(newick_str: str) -> List[str]:
+def _tokenize_newick(newick_str: str) -> list[str]:
     tokens = []
     i = 0
     s = newick_str.strip().rstrip(";")
@@ -31,11 +34,11 @@ def _tokenize_newick(newick_str: str) -> List[str]:
             i += 1
         elif ch == "'":
             j = s.index("'", i + 1)
-            tokens.append(s[i:j + 1])
+            tokens.append(s[i : j + 1])
             i = j + 1
         elif ch == '"':
             j = s.index('"', i + 1)
-            tokens.append(s[i:j + 1])
+            tokens.append(s[i : j + 1])
             i = j + 1
         elif ch.isspace():
             i += 1
@@ -48,7 +51,7 @@ def _tokenize_newick(newick_str: str) -> List[str]:
     return tokens
 
 
-def _parse_tokens(tokens: List[str], pos: int = 0) -> Tuple[TreeNode, int]:
+def _parse_tokens(tokens: list[str], pos: int = 0) -> tuple[TreeNode, int]:
     node = TreeNode()
     name = ""
     branch_length = 0.0
@@ -56,7 +59,7 @@ def _parse_tokens(tokens: List[str], pos: int = 0) -> Tuple[TreeNode, int]:
 
     if tokens[pos] == "(":
         pos += 1
-        children: List[TreeNode] = []
+        children: list[TreeNode] = []
         while True:
             child, pos = _parse_tokens(tokens, pos)
             children.append(child)
@@ -77,7 +80,7 @@ def _parse_tokens(tokens: List[str], pos: int = 0) -> Tuple[TreeNode, int]:
         node.name = name
         node.is_leaf = True
 
-    if pos < len(tokens) and tokens[pos] != "," and tokens[pos] != ")" and tokens[pos] != ";":
+    if pos < len(tokens) and tokens[pos] not in (",", ")", ";", ":"):
         tag = tokens[pos]
         pos += 1
         try:
@@ -130,7 +133,7 @@ def tree_to_newick(tree: TreeNode) -> str:
     return _tree_to_newick_rec(tree) + ";"
 
 
-def _leaf_index_map(node: TreeNode, idx: int = 0) -> Tuple[Dict[str, int], int]:
+def _leaf_index_map(node: TreeNode, idx: int = 0) -> tuple[dict[str, int], int]:
     mapping = {}
     if node.is_leaf:
         mapping[node.name] = idx
@@ -141,7 +144,7 @@ def _leaf_index_map(node: TreeNode, idx: int = 0) -> Tuple[Dict[str, int], int]:
     return mapping, idx
 
 
-def newick_to_splits(newick_str: str, n_leaves: int) -> List[Tuple[np.ndarray, float]]:
+def newick_to_splits(newick_str: str, n_leaves: int) -> list[tuple[np.ndarray, float]]:
     tree = parse_newick(newick_str)
     leaf_to_idx, _ = _leaf_index_map(tree)
 
@@ -149,7 +152,7 @@ def newick_to_splits(newick_str: str, n_leaves: int) -> List[Tuple[np.ndarray, f
 
     def _collect(node: TreeNode):
         if node.is_leaf:
-            return set()
+            return {node.name}
 
         child_sets = []
         for child in node.children:
@@ -177,12 +180,10 @@ def newick_to_splits(newick_str: str, n_leaves: int) -> List[Tuple[np.ndarray, f
 def _splits_compatible(s1: np.ndarray, s2: np.ndarray) -> bool:
     i1 = set(np.where(s1)[0].tolist())
     i2 = set(np.where(s2)[0].tolist())
-    return (i1.issubset(i2) or i2.issubset(i1) or
-            len(i1.intersection(i2)) == 0)
+    return i1.issubset(i2) or i2.issubset(i1) or len(i1.intersection(i2)) == 0
 
 
-def splits_to_newick(splits: List[Tuple[np.ndarray, float]],
-                     leaf_names: List[str]) -> str:
+def splits_to_newick(splits: list[tuple[np.ndarray, float]], leaf_names: list[str]) -> str:
     if not splits:
         return f"({','.join(leaf_names)});"
 
@@ -194,16 +195,12 @@ def splits_to_newick(splits: List[Tuple[np.ndarray, float]],
 
     clusters = [{i} for i in range(n_leaves)]
 
-    sorted_splits = sorted(
-        [(mask.copy(), bl) for mask, bl in splits],
-        key=lambda x: x[0].sum()
-    )
+    sorted_splits = sorted([(mask.copy(), bl) for mask, bl in splits], key=lambda x: x[0].sum())
 
     active_clusters = list(range(n_leaves))
     node_counter = n_leaves
-    cluster_to_node: Dict[int, TreeNode] = {
-        i: TreeNode(name=leaf_names[i], is_leaf=True)
-        for i in range(n_leaves)
+    cluster_to_node: dict[int, TreeNode] = {
+        i: TreeNode(name=leaf_names[i], is_leaf=True) for i in range(n_leaves)
     }
 
     for mask, blen in sorted_splits:
@@ -234,6 +231,8 @@ def splits_to_newick(splits: List[Tuple[np.ndarray, float]],
 
 def robinson_foulds(splits1, splits2) -> float:
     def split_key(mask):
+        if mask[0]:
+            mask = ~mask
         return bytes(mask.tobytes())
 
     keys1 = set()
@@ -265,6 +264,7 @@ def patristic_distances(tree_newick: str, n_leaves: int) -> np.ndarray:
         node_list.append(node)
         for child in node.children:
             _assign_ids(child)
+
     _assign_ids(tree)
 
     n_nodes = len(node_list)
@@ -290,12 +290,9 @@ def patristic_distances(tree_newick: str, n_leaves: int) -> np.ndarray:
 
     dist_to_root = np.zeros(n_nodes, dtype=np.float64)
     for nid in range(n_nodes):
-        total_bl = 0.0
-        curr = nid
-        while parent[curr] != -1:
-            total_bl += bl_to_parent[curr]
-            curr = parent[curr]
-        dist_to_root[nid] = total_bl
+        p = parent[nid]
+        if p != -1:
+            dist_to_root[nid] = dist_to_root[p] + bl_to_parent[nid]
 
     leaf_ancestors = []
     for lid in leaf_ids:
@@ -322,7 +319,7 @@ def patristic_distances(tree_newick: str, n_leaves: int) -> np.ndarray:
     return dist
 
 
-def get_leaf_order(newick_str: str) -> List[str]:
+def get_leaf_order(newick_str: str) -> list[str]:
     tree = parse_newick(newick_str)
     leaves = []
 
@@ -342,7 +339,8 @@ def corrupt_tree(newick_str: str, n_swaps: int = 3, seed: int = None) -> str:
         np.random.seed(seed)
     tree = parse_newick(newick_str)
 
-    internal_nodes: List[TreeNode] = []
+    internal_nodes: list[TreeNode] = []
+
     def _collect(node):
         if not node.is_leaf and len(node.children) == 2:
             c1, c2 = node.children
@@ -351,6 +349,7 @@ def corrupt_tree(newick_str: str, n_swaps: int = 3, seed: int = None) -> str:
                     internal_nodes.append(node)
         for child in node.children:
             _collect(child)
+
     _collect(tree)
 
     if not internal_nodes:

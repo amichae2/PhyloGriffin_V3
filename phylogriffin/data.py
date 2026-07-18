@@ -3,28 +3,41 @@ PhyloGriffin v3 -- Data loading and dataset classes.
 """
 
 import os
-import warnings
-import torch
+
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+import torch
 from torch.utils.data import Dataset
 
-from .config import PhyloGriffinConfig
-
-AA_TO_IDX: Dict[str, int] = {
-    "A": 0, "R": 1, "N": 2, "D": 3, "C": 4,
-    "Q": 5, "E": 6, "G": 7, "H": 8, "I": 9,
-    "L": 10, "K": 11, "M": 12, "F": 13, "P": 14,
-    "S": 15, "T": 16, "W": 17, "Y": 18, "V": 19,
+AA_TO_IDX: dict[str, int] = {
+    "A": 0,
+    "R": 1,
+    "N": 2,
+    "D": 3,
+    "C": 4,
+    "Q": 5,
+    "E": 6,
+    "G": 7,
+    "H": 8,
+    "I": 9,
+    "L": 10,
+    "K": 11,
+    "M": 12,
+    "F": 13,
+    "P": 14,
+    "S": 15,
+    "T": 16,
+    "W": 17,
+    "Y": 18,
+    "V": 19,
 }
 
-IDX_TO_AA: Dict[int, str] = {v: k for k, v in AA_TO_IDX.items()}
+IDX_TO_AA: dict[int, str] = {v: k for k, v in AA_TO_IDX.items()}
 
-NT_TO_IDX: Dict[str, int] = {"A": 0, "C": 1, "G": 2, "T": 3}
-IDX_TO_NT: Dict[int, str] = {v: k for k, v in NT_TO_IDX.items()}
+NT_TO_IDX: dict[str, int] = {"A": 0, "C": 1, "G": 2, "T": 3}
+IDX_TO_NT: dict[int, str] = {v: k for k, v in NT_TO_IDX.items()}
 
 
-def _get_alphabet_maps(alphabet: str) -> Tuple[Dict[str, int], Dict[int, str], int, int]:
+def _get_alphabet_maps(alphabet: str) -> tuple[dict[str, int], dict[int, str], int, int]:
     if alphabet == "protein":
         return AA_TO_IDX, IDX_TO_AA, 20, 21
     elif alphabet == "nucleotide":
@@ -33,7 +46,7 @@ def _get_alphabet_maps(alphabet: str) -> Tuple[Dict[str, int], Dict[int, str], i
         raise ValueError(f"Unknown alphabet: {alphabet}")
 
 
-def _tokenize_sequence(seq: str, char_to_idx: Dict[str, int], gap_idx: int) -> List[int]:
+def _tokenize_sequence(seq: str, char_to_idx: dict[str, int], gap_idx: int) -> list[int]:
     tokens = []
     for ch in seq.upper():
         if ch in ("-", "."):
@@ -45,14 +58,14 @@ def _tokenize_sequence(seq: str, char_to_idx: Dict[str, int], gap_idx: int) -> L
     return tokens
 
 
-def load_fasta(path: str, alphabet: str = "protein") -> Tuple[torch.Tensor, List[str]]:
+def load_fasta(path: str, alphabet: str = "protein") -> tuple[torch.Tensor, list[str]]:
     char_to_idx, _, gap_idx, pad_idx = _get_alphabet_maps(alphabet)
     names = []
     sequences = []
     current_name = ""
-    current_seq: List[str] = []
+    current_seq: list[str] = []
 
-    with open(path, "r") as f:
+    with open(path) as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -89,10 +102,10 @@ def load_fasta(path: str, alphabet: str = "protein") -> Tuple[torch.Tensor, List
     return msa, names
 
 
-def load_phylip(path: str, alphabet: str = "protein") -> Tuple[torch.Tensor, List[str]]:
+def load_phylip(path: str, alphabet: str = "protein") -> tuple[torch.Tensor, list[str]]:
     char_to_idx, _, gap_idx, pad_idx = _get_alphabet_maps(alphabet)
 
-    with open(path, "r") as f:
+    with open(path) as f:
         lines = [line.strip() for line in f if line.strip()]
 
     if not lines:
@@ -106,7 +119,7 @@ def load_phylip(path: str, alphabet: str = "protein") -> Tuple[torch.Tensor, Lis
 
     data_lines = lines[1:]
     seq_names = []
-    seq_dict: Dict[str, List[str]] = {}
+    seq_dict: dict[str, list[str]] = {}
 
     i = 0
     while i < len(data_lines):
@@ -137,8 +150,8 @@ def load_phylip(path: str, alphabet: str = "protein") -> Tuple[torch.Tensor, Lis
     return msa, seq_names
 
 
-def load_msa(path: str, alphabet: str = "protein") -> Tuple[torch.Tensor, List[str]]:
-    with open(path, "r") as f:
+def load_msa(path: str, alphabet: str = "protein") -> tuple[torch.Tensor, list[str]]:
+    with open(path) as f:
         first_line = f.readline().strip()
     if first_line and not first_line.startswith(">"):
         parts = first_line.split()
@@ -161,13 +174,13 @@ class PreGeneratedDataset(Dataset):
         self,
         pregen_dir: str,
         n_examples_per_epoch: int = 5000,
-        n_leaves_range: Tuple[int, int] = (50, 500),
-        n_sites_range: Tuple[int, int] = (200, 1500),
+        n_leaves_range: tuple[int, int] = (50, 500),
+        n_sites_range: tuple[int, int] = (200, 1500),
         model: str = "JTT",
         alpha: float = 1.0,
         include_trees: bool = True,
         split: str = "train",
-        train_val_test: Tuple[float, float, float] = (0.8, 0.1, 0.1),
+        train_val_test: tuple[float, float, float] = (0.8, 0.1, 0.1),
         seed: int = 42,
     ):
         self.pregen_dir = pregen_dir
@@ -181,12 +194,13 @@ class PreGeneratedDataset(Dataset):
         self._rng = np.random.default_rng(seed)
 
         from .simulation import build_pregen_index
+
         self.pregen_index = build_pregen_index(pregen_dir)
 
     def __len__(self) -> int:
         return self.n_examples_per_epoch
 
-    def __getitem__(self, idx: int) -> Dict:
+    def __getitem__(self, idx: int) -> dict:
         from .simulation import random_training_example
 
         seed = self.seed + idx if self.seed is not None else None
@@ -205,6 +219,7 @@ class PreGeneratedDataset(Dataset):
         result = {"msa": msa, "mask": (msa != 21).bool()}
         if self.include_trees and tree_newick:
             from .tree_utils import patristic_distances
+
             pairwise_distances = patristic_distances(tree_newick, msa.shape[0])
             result["tree_newick"] = tree_newick
             result["leaf_names"] = seq_names
@@ -225,7 +240,7 @@ class PreGeneratedSubproblemDataset(PreGeneratedDataset):
         mask = result["mask"]
         N = msa.shape[0]
         if N > self.max_leaves:
-            indices = torch.randperm(N)[:self.max_leaves]
+            indices = torch.randperm(N)[: self.max_leaves]
             msa = msa[indices]
             mask = mask[indices]
         else:
@@ -261,6 +276,7 @@ class PreGeneratedErrorTreeDataset(PreGeneratedDataset):
         result = super().__getitem__(idx)
         true_tree = result.get("tree_newick", "")
         from .tree_utils import corrupt_tree
+
         corrupted = corrupt_tree(true_tree, n_swaps=self.n_nni_swaps, seed=idx)
         msa = result["msa"]
         return {
@@ -277,10 +293,13 @@ class _MSATreeDataset(Dataset):
         self.msa_dir = msa_dir
         self.tree_dir = tree_dir
         self.alphabet = alphabet
-        self.files = sorted([
-            f for f in os.listdir(msa_dir)
-            if f.endswith(".fa") or f.endswith(".fasta") or f.endswith(".aln")
-        ])
+        self.files = sorted(
+            [
+                f
+                for f in os.listdir(msa_dir)
+                if f.endswith(".fa") or f.endswith(".fasta") or f.endswith(".aln")
+            ]
+        )
 
     def __len__(self):
         return len(self.files)
@@ -302,28 +321,32 @@ class MSADataset(Dataset):
         self.msa_dir = msa_dir
         self.alphabet = alphabet
         self.max_seq_len = max_seq_len
-        self.files = sorted([
-            f for f in os.listdir(msa_dir)
-            if f.endswith(".fa") or f.endswith(".fasta") or f.endswith(".aln")
-        ])
+        self.files = sorted(
+            [
+                f
+                for f in os.listdir(msa_dir)
+                if f.endswith(".fa") or f.endswith(".fasta") or f.endswith(".aln")
+            ]
+        )
 
     def __len__(self) -> int:
         return len(self.files)
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         path = os.path.join(self.msa_dir, self.files[idx])
         msa, _ = load_msa(path, self.alphabet)
         if msa.shape[1] > self.max_seq_len:
             start = torch.randint(0, msa.shape[1] - self.max_seq_len + 1, (1,)).item()
-            msa = msa[:, start:start + self.max_seq_len]
+            msa = msa[:, start : start + self.max_seq_len]
         mask = (msa != 21).bool()
         return {"msa": msa, "mask": mask}
 
 
 class ContrastiveDataset(_MSATreeDataset):
-    def __getitem__(self, idx: int) -> Dict:
+    def __getitem__(self, idx: int) -> dict:
         msa, mask, leaf_names, tree_newick = self._load_msa_and_tree(idx)
         from .tree_utils import patristic_distances
+
         pairwise_distances = patristic_distances(tree_newick, msa.shape[0])
         return {
             "msa": msa,
@@ -335,9 +358,10 @@ class ContrastiveDataset(_MSATreeDataset):
 
 
 class GraphDataset(_MSATreeDataset):
-    def __getitem__(self, idx: int) -> Dict:
+    def __getitem__(self, idx: int) -> dict:
         msa, mask, leaf_names, tree_newick = self._load_msa_and_tree(idx)
-        from .tree_utils import patristic_distances, newick_to_splits
+        from .tree_utils import newick_to_splits, patristic_distances
+
         pairwise_distances = patristic_distances(tree_newick, msa.shape[0])
         splits = newick_to_splits(tree_newick, msa.shape[0])
         return {
@@ -351,16 +375,17 @@ class GraphDataset(_MSATreeDataset):
 
 
 class SubproblemDataset(_MSATreeDataset):
-    def __init__(self, msa_dir: str, tree_dir: str, max_leaves: int = 1500,
-                 alphabet: str = "protein"):
+    def __init__(
+        self, msa_dir: str, tree_dir: str, max_leaves: int = 1500, alphabet: str = "protein"
+    ):
         super().__init__(msa_dir, tree_dir, alphabet)
         self.max_leaves = max_leaves
 
-    def __getitem__(self, idx: int) -> Dict:
+    def __getitem__(self, idx: int) -> dict:
         msa, mask, _, tree_newick = self._load_msa_and_tree(idx)
         N = msa.shape[0]
         if N > self.max_leaves:
-            indices = torch.randperm(N)[:self.max_leaves].tolist()
+            indices = torch.randperm(N)[: self.max_leaves].tolist()
             msa = msa[indices]
             mask = mask[indices]
         else:
@@ -374,9 +399,9 @@ class SubproblemDataset(_MSATreeDataset):
 
 
 class DecomposedTreeDataset(_MSATreeDataset):
-    def __getitem__(self, idx: int) -> Dict:
+    def __getitem__(self, idx: int) -> dict:
         msa, mask, leaf_names, tree_newick = self._load_msa_and_tree(idx)
-        from .tree_utils import parse_newick, get_leaf_order
+        from .tree_utils import get_leaf_order
 
         leaf_order = get_leaf_order(tree_newick)
         n_leaves = len(leaf_order)
@@ -403,9 +428,10 @@ class ErrorTreeDataset(_MSATreeDataset):
         super().__init__(msa_dir, tree_dir, alphabet)
         self.n_nni_swaps = n_nni_swaps
 
-    def __getitem__(self, idx: int) -> Dict:
+    def __getitem__(self, idx: int) -> dict:
         msa, mask, _, true_tree = self._load_msa_and_tree(idx)
         from .tree_utils import corrupt_tree
+
         corrupted = corrupt_tree(true_tree, n_swaps=self.n_nni_swaps, seed=idx)
         return {
             "corrupted_tree": corrupted,

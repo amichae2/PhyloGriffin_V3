@@ -5,12 +5,10 @@ Train the NNI-based tree refinement module.
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-from typing import Optional
 
 from ..config import PhyloGriffinConfig
 
@@ -24,8 +22,11 @@ def train_refinement(
     refinement = refinement.to(device)
     refinement.train()
 
-    optimizer = AdamW(refinement.parameters(), lr=config.training.learning_rate,
-                      weight_decay=config.training.weight_decay)
+    optimizer = AdamW(
+        refinement.parameters(),
+        lr=config.training.learning_rate,
+        weight_decay=config.training.weight_decay,
+    )
     max_steps = 10000
     scheduler = CosineAnnealingLR(optimizer, T_max=max_steps)
 

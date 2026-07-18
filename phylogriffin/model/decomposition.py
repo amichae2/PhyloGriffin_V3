@@ -1,18 +1,19 @@
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
-from typing import List, Dict, Tuple, Optional
+
 from ..config import DecompositionConfig
 
 try:
     from scipy.sparse.linalg import eigsh
+
     HAS_SCIPY_SPARSE = True
 except ImportError:
     HAS_SCIPY_SPARSE = False
 
 try:
     from scipy.cluster.vq import kmeans2
+
     HAS_SCIPY_KMEANS = True
 except ImportError:
     HAS_SCIPY_KMEANS = False
@@ -23,8 +24,13 @@ class HierarchicalDecomposition(nn.Module):
         super().__init__()
         self.config = config
 
-    def forward(self, msa: torch.Tensor, embeddings: torch.Tensor,
-                edge_index: torch.Tensor, edge_weights: torch.Tensor) -> Tuple[List[Dict], str]:
+    def forward(
+        self,
+        msa: torch.Tensor,
+        embeddings: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_weights: torch.Tensor,
+    ) -> tuple[list[dict], str]:
         N = msa.shape[0]
         device = msa.device
 
@@ -41,20 +47,26 @@ class HierarchicalDecomposition(nn.Module):
         if self.config.clustering_method == "spectral":
             try:
                 clusters = self._spectral_clustering(
-                    edge_index, edge_weights, N,
+                    edge_index,
+                    edge_weights,
+                    N,
                     self.config.max_subproblem_size,
                     self.config.min_subproblem_size,
                 )
             except Exception:
                 clusters = self._greedy_partitioning(
-                    edge_index, edge_weights, N,
+                    edge_index,
+                    edge_weights,
+                    N,
                     self.config.max_subproblem_size,
                     self.config.min_subproblem_size,
                     embeddings,
                 )
         else:
             clusters = self._greedy_partitioning(
-                edge_index, edge_weights, N,
+                edge_index,
+                edge_weights,
+                N,
                 self.config.max_subproblem_size,
                 self.config.min_subproblem_size,
                 embeddings,
@@ -69,7 +81,7 @@ class HierarchicalDecomposition(nn.Module):
             in_cluster = torch.zeros(N, dtype=torch.bool, device=device)
             in_cluster[idx] = True
 
-            g2l = {g.item(): l for l, g in enumerate(idx)}
+            g2l = {g.item(): li for li, g in enumerate(idx)}
 
             src = edge_index[0]
             dst = edge_index[1]
@@ -78,28 +90,38 @@ class HierarchicalDecomposition(nn.Module):
             if edge_mask.any():
                 local_src = torch.tensor(
                     [g2l[s.item()] for s in src[edge_mask].tolist()],
-                    dtype=torch.long, device=device,
+                    dtype=torch.long,
+                    device=device,
                 )
                 local_dst = torch.tensor(
                     [g2l[d.item()] for d in dst[edge_mask].tolist()],
-                    dtype=torch.long, device=device,
+                    dtype=torch.long,
+                    device=device,
                 )
                 sub_ei = torch.stack([local_src, local_dst], dim=0)
             else:
                 sub_ei = torch.zeros((2, 0), dtype=torch.long, device=device)
 
-            subproblems.append({
-                "indices": idx,
-                "sub_msa": sub_msa,
-                "sub_embeddings": sub_embs,
-                "sub_edge_index": sub_ei,
-            })
+            subproblems.append(
+                {
+                    "indices": idx,
+                    "sub_msa": sub_msa,
+                    "sub_embeddings": sub_embs,
+                    "sub_edge_index": sub_ei,
+                }
+            )
 
         guide = self._build_guide_tree(subproblems, embeddings)
         return subproblems, guide
 
-    def _spectral_clustering(self, edge_index: torch.Tensor, edge_weights: torch.Tensor,
-                              n_nodes: int, max_size: int, min_size: int) -> List[torch.Tensor]:
+    def _spectral_clustering(
+        self,
+        edge_index: torch.Tensor,
+        edge_weights: torch.Tensor,
+        n_nodes: int,
+        max_size: int,
+        min_size: int,
+    ) -> list[torch.Tensor]:
         if not HAS_SCIPY_SPARSE:
             return self._greedy_partitioning(edge_index, edge_weights, n_nodes, max_size, min_size)
 
@@ -119,12 +141,12 @@ class HierarchicalDecomposition(nn.Module):
 
         d = np.array(A.sum(axis=1)).flatten()
         d_inv_sqrt = np.where(d > 1e-10, 1.0 / np.sqrt(d), 0.0)
-        D_inv_sqrt = sp.diags(d_inv_sqrt, format='csr')
-        I = sp.eye(n_nodes, format='csr')
-        L = I - D_inv_sqrt @ A @ D_inv_sqrt
+        D_inv_sqrt = sp.diags(d_inv_sqrt, format="csr")
+        eye = sp.eye(n_nodes, format="csr")
+        L = eye - D_inv_sqrt @ A @ D_inv_sqrt
 
         try:
-            eigenvalues, eigenvectors = eigsh(L, k=k, which='SM', maxiter=500)
+            eigenvalues, eigenvectors = eigsh(L, k=k, which="SM", maxiter=500)
         except Exception:
             return self._greedy_partitioning(edge_index, edge_weights, n_nodes, max_size, min_size)
 
@@ -135,7 +157,7 @@ class HierarchicalDecomposition(nn.Module):
 
         if HAS_SCIPY_KMEANS:
             try:
-                centroids, labels = kmeans2(X, k, minit='points', missing='warn')
+                centroids, labels = kmeans2(X, k, minit="points", missing="warn")
             except Exception:
                 labels = self._simple_kmeans(X, k)
         else:
@@ -164,7 +186,9 @@ class HierarchicalDecomposition(nn.Module):
                     sub_ei = torch.tensor(np.stack([sub_rows, sub_cols]), dtype=torch.long)
                     sub_ew = torch.tensor(sub_vals, dtype=torch.float)
 
-                    sub_result = self._spectral_clustering(sub_ei, sub_ew, len(sub_nodes), max_size, min_size)
+                    sub_result = self._spectral_clustering(
+                        sub_ei, sub_ew, len(sub_nodes), max_size, min_size
+                    )
                     for sr in sub_result:
                         result.append(torch.from_numpy(sub_nodes[sr.numpy()]).long())
                 else:
@@ -175,9 +199,15 @@ class HierarchicalDecomposition(nn.Module):
         result = self._merge_small_clusters(result, edge_index, edge_weights, n_nodes, min_size)
         return result
 
-    def _greedy_partitioning(self, edge_index: torch.Tensor, edge_weights: torch.Tensor,
-                              n_nodes: int, max_size: int, min_size: int,
-                              embeddings: Optional[torch.Tensor] = None) -> List[torch.Tensor]:
+    def _greedy_partitioning(
+        self,
+        edge_index: torch.Tensor,
+        edge_weights: torch.Tensor,
+        n_nodes: int,
+        max_size: int,
+        min_size: int,
+        embeddings: torch.Tensor | None = None,
+    ) -> list[torch.Tensor]:
         device = edge_index.device
         degree = torch.zeros(n_nodes, device=device)
         degree.index_add_(0, edge_index[0], edge_weights.float())
@@ -206,7 +236,7 @@ class HierarchicalDecomposition(nn.Module):
                 u = queue.pop(0)
                 cluster.append(u)
                 neighbors = sorted(adj[u], key=lambda x: x[1], reverse=True)
-                for v, w in neighbors:
+                for v, _w in neighbors:
                     if not assigned[v] and len(cluster) < max_size:
                         assigned[v] = True
                         queue.append(v)
@@ -218,7 +248,7 @@ class HierarchicalDecomposition(nn.Module):
             orphan_indices = torch.where(orphan_mask)[0]
             if embeddings is not None and len(clusters) > 0:
                 embs = embeddings.to(device).float()
-                orphan_embs = embs[orphan_indices]
+                embs[orphan_indices]
                 cluster_means = torch.stack([embs[cl].mean(dim=0) for cl in clusters])
                 for oi_val in orphan_indices:
                     oe = embs[oi_val]
@@ -231,9 +261,14 @@ class HierarchicalDecomposition(nn.Module):
         clusters = self._merge_small_clusters(clusters, edge_index, edge_weights, n_nodes, min_size)
         return clusters
 
-    def _merge_small_clusters(self, clusters: List[torch.Tensor], edge_index: torch.Tensor,
-                               edge_weights: torch.Tensor, n_nodes: int,
-                               min_size: int) -> List[torch.Tensor]:
+    def _merge_small_clusters(
+        self,
+        clusters: list[torch.Tensor],
+        edge_index: torch.Tensor,
+        edge_weights: torch.Tensor,
+        n_nodes: int,
+        min_size: int,
+    ) -> list[torch.Tensor]:
         if len(clusters) <= 1:
             return clusters
 
@@ -286,8 +321,9 @@ class HierarchicalDecomposition(nn.Module):
 
         return clusters
 
-    def _simple_kmeans(self, X: np.ndarray, k: int, max_iter: int = 100,
-                        seed: int = 42) -> np.ndarray:
+    def _simple_kmeans(
+        self, X: np.ndarray, k: int, max_iter: int = 100, seed: int = 42
+    ) -> np.ndarray:
         n, d = X.shape
         if k >= n:
             return np.arange(n, dtype=np.int64)
@@ -312,25 +348,15 @@ class HierarchicalDecomposition(nn.Module):
         dists = np.sum((X[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
         return np.argmin(dists, axis=1)
 
-    def _build_guide_tree(self, subproblems: List[Dict],
-                           embeddings: torch.Tensor) -> str:
+    def _build_guide_tree(self, subproblems: list[dict], embeddings: torch.Tensor) -> str:
         K = len(subproblems)
         if K == 1:
-            indices = subproblems[0]["indices"]
-            n = len(indices)
-            if n == 1:
-                return f"(L{indices[0].item()});"
-            show = min(n, 20)
-            names = ",".join([f"L{indices[i].item()}" for i in range(show)])
-            if n > 20:
-                names += ",..."
-            return f"({names});"
+            return "(sub0:0.0);"
 
         device = embeddings.device
-        means = torch.stack([
-            sp["sub_embeddings"].to(device).float().mean(dim=0)
-            for sp in subproblems
-        ])
+        means = torch.stack(
+            [sp["sub_embeddings"].to(device).float().mean(dim=0) for sp in subproblems]
+        )
 
         D = torch.cdist(means, means, p=2).cpu().numpy().astype(np.float64)
 

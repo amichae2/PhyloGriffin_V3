@@ -6,7 +6,6 @@ Predicts whether two sequences are phylogenetically adjacent.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List, Tuple
 
 
 class GraphPredictor(nn.Module):
@@ -18,7 +17,7 @@ class GraphPredictor(nn.Module):
     ancestor-descendant relationship in the true phylogenetic tree.
     """
 
-    def __init__(self, d_model: int, hidden_dims: List[int]):
+    def __init__(self, d_model: int, hidden_dims: list[int]):
         super().__init__()
         self.d_model = d_model
         input_dim = 4 * d_model
@@ -32,12 +31,14 @@ class GraphPredictor(nn.Module):
         self.output_layer = nn.Linear(in_dim, 1)
 
     def forward_single(self, emb_i: torch.Tensor, emb_j: torch.Tensor) -> torch.Tensor:
-        concat = torch.cat([
-            emb_i,
-            emb_j,
-            emb_i * emb_j,
-            torch.abs(emb_i - emb_j),
-        ])
+        concat = torch.cat(
+            [
+                emb_i,
+                emb_j,
+                emb_i * emb_j,
+                torch.abs(emb_i - emb_j),
+            ]
+        )
 
         x = concat
         for layer in self.layers:
@@ -48,12 +49,15 @@ class GraphPredictor(nn.Module):
         return torch.sigmoid(x).squeeze(-1)
 
     def forward_batch(self, emb_i: torch.Tensor, emb_j: torch.Tensor) -> torch.Tensor:
-        concat = torch.cat([
-            emb_i,
-            emb_j,
-            emb_i * emb_j,
-            torch.abs(emb_i - emb_j),
-        ], dim=-1)
+        concat = torch.cat(
+            [
+                emb_i,
+                emb_j,
+                emb_i * emb_j,
+                torch.abs(emb_i - emb_j),
+            ],
+            dim=-1,
+        )
 
         x = concat
         for layer in self.layers:
@@ -70,7 +74,7 @@ class GraphPredictor(nn.Module):
         edge_threshold: float = 0.5,
         k_candidates: int = 200,
         k_neighbors: int = 50,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Build the full sparse phylogenetic graph.
 
@@ -111,9 +115,7 @@ class GraphPredictor(nn.Module):
             if k_cand < N - 1:
                 _, topk_idx = torch.topk(dists, k=k_cand + 1, dim=-1, largest=False)
             else:
-                topk_idx = torch.arange(N, device=device).unsqueeze(0).expand(
-                    chunk.size(0), -1
-                )
+                topk_idx = torch.arange(N, device=device).unsqueeze(0).expand(chunk.size(0), -1)
 
             for local_i in range(chunk.size(0)):
                 global_i = start + local_i
@@ -121,9 +123,7 @@ class GraphPredictor(nn.Module):
                 mask = cands != global_i
                 cands = cands[mask][:k_cand]
                 edges_i_parts.append(
-                    torch.full(
-                        (cands.numel(),), global_i, dtype=torch.long, device=device
-                    )
+                    torch.full((cands.numel(),), global_i, dtype=torch.long, device=device)
                 )
                 edges_j_parts.append(cands)
 
@@ -163,33 +163,33 @@ class GraphPredictor(nn.Module):
 
         edge_key = u * N + v
         unique_keys, inverse = edge_key.unique(return_inverse=True)
-        edge_weights = torch.zeros(
-            unique_keys.numel(), device=device
-        ).scatter_reduce(0, inverse, probs, reduce="amax", include_self=False)
+        edge_weights = torch.zeros(unique_keys.numel(), device=device).scatter_reduce(
+            0, inverse, probs, reduce="amax", include_self=False
+        )
         u_unique = unique_keys // N
         v_unique = unique_keys % N
         edge_index = torch.stack([u_unique, v_unique], dim=0)
 
         if k_neighbors is not None and k_neighbors > 0 and edge_index.size(1) > 0:
-            neighbors = {i: [] for i in range(N)}
-            for e in range(edge_index.size(1)):
-                ui = edge_index[0, e].item()
-                vi = edge_index[1, e].item()
-                w = edge_weights[e].item()
-                neighbors[ui].append((vi, w, e))
-                neighbors[vi].append((ui, w, e))
+            E = edge_index.size(1)
+            sorted_w, sorted_idx = edge_weights.sort(descending=True)
+            sorted_u = edge_index[0, sorted_idx].cpu()
+            sorted_v = edge_index[1, sorted_idx].cpu()
 
-            keep = set()
-            for node in range(N):
-                node_edges = sorted(
-                    neighbors[node], key=lambda x: x[1], reverse=True
-                )
-                for _, _, e_idx in node_edges[:k_neighbors]:
-                    keep.add(e_idx)
+            node_counts = torch.zeros(N, dtype=torch.long)
+            keep_mask = torch.zeros(E, dtype=torch.bool)
 
-            keep = torch.tensor(sorted(keep), dtype=torch.long, device=device)
-            edge_index = edge_index[:, keep]
-            edge_weights = edge_weights[keep]
+            for e in range(E):
+                u = sorted_u[e].item()
+                v = sorted_v[e].item()
+                if node_counts[u] < k_neighbors and node_counts[v] < k_neighbors:
+                    keep_idx = sorted_idx[e].item()
+                    keep_mask[keep_idx] = True
+                    node_counts[u] += 1
+                    node_counts[v] += 1
+
+            edge_index = edge_index[:, keep_mask]
+            edge_weights = edge_weights[keep_mask]
 
         self.train(was_training)
         return edge_index, edge_weights

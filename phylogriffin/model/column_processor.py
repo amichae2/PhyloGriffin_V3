@@ -1,8 +1,9 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-from typing import Tuple, Optional, List
+
 from ..config import PhyloGriffinConfig
 
 
@@ -40,8 +41,8 @@ class RG_LRU(nn.Module):
         self.output_proj = nn.Linear(d_rnn, d_model)
 
     def forward(
-        self, x: torch.Tensor, state: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self, x: torch.Tensor, state: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         N = x.shape[0]
         if state is None:
             state = torch.zeros(N, self.d_rnn, device=x.device, dtype=x.dtype)
@@ -62,7 +63,7 @@ class RG_LRU(nn.Module):
 def _sequential_scan(a: torch.Tensor, input_term: torch.Tensor) -> torch.Tensor:
     N, L, D = a.shape
     h = torch.zeros(N, D, device=a.device, dtype=a.dtype)
-    outputs: List[torch.Tensor] = []
+    outputs: list[torch.Tensor] = []
     for t in range(L):
         h = a[:, t, :] * h + input_term[:, t, :]
         outputs.append(h.unsqueeze(1))
@@ -188,9 +189,7 @@ class LocalMQA(nn.Module):
         x_rot = torch.stack([x_rot_even, x_rot_odd], dim=-1)
         return x_rot.reshape(*batch, L, d)
 
-    def forward(
-        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         N, L, _ = x.shape
 
         q = self.q_proj(x).view(N, L, self.n_heads, self.head_dim)
@@ -246,9 +245,7 @@ class GriffinLayer(nn.Module):
         self.mlp = GatedMLP(d_model, mlp_expansion, dropout)
         self.mlp_norm = RMSNorm(d_model)
 
-    def forward(
-        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         if self.is_recurrent:
             t_out = self.temporal_mixer(x)
         else:
@@ -277,25 +274,19 @@ class TitansMemory(nn.Module):
         self.surprise_threshold = surprise_threshold
         self.momentum = momentum
 
-        self.keys = nn.Parameter(torch.randn(n_slots, d_mem))
-        self.values = nn.Parameter(torch.randn(n_slots, d_mem))
+        self.register_buffer("keys", torch.randn(n_slots, d_mem))
+        self.register_buffer("values", torch.randn(n_slots, d_mem))
         self.register_buffer("usage", torch.zeros(n_slots))
 
         self.col_proj = nn.Linear(d_model, d_mem)
         self.query_proj = nn.Linear(d_mem, d_mem)
         self.read_proj = nn.Linear(d_mem, d_model)
-        self.mem_mlp = nn.ModuleList(
-            [nn.Linear(d_mem, d_mem) for _ in range(depth)]
-        )
+        self.mem_mlp = nn.ModuleList([nn.Linear(d_mem, d_mem) for _ in range(depth)])
 
     def reset_state(self):
         self.usage.zero_()
-        nn.init.normal_(self.keys, std=0.02)
-        nn.init.normal_(self.values, std=0.02)
 
-    def forward(
-        self, col_repr: torch.Tensor, mask: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, col_repr: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         valid = col_repr[mask]
         if valid.shape[0] == 0:
             return col_repr
@@ -304,49 +295,37 @@ class TitansMemory(nn.Module):
         c_col = self.col_proj(c_col)
 
         query = self.query_proj(c_col)
-        scores = F.softmax(
-            torch.matmul(self.keys, query) / math.sqrt(self.d_mem), dim=0
-        )
+        scores = F.softmax(torch.matmul(self.keys, query) / math.sqrt(self.d_mem), dim=0)
         predicted = torch.matmul(scores, self.values)
 
         surprise = F.mse_loss(c_col, predicted, reduction="mean")
 
         if self.training:
             idx = scores.argmax().item()
-            new_key = (
-                self.momentum * self.keys[idx]
-                + (1.0 - self.momentum) * c_col
-            )
-            mem_val = c_col
-            for layer in self.mem_mlp:
-                mem_val = F.silu(layer(mem_val))
-            new_val = (
-                self.momentum * self.values[idx]
-                + (1.0 - self.momentum) * mem_val
-            )
-
             if surprise > self.surprise_threshold:
-                self.keys.data[idx] = new_key.detach()
-                self.values.data[idx] = new_val.detach()
-                self.usage[idx] += 1
+                with torch.no_grad():
+                    new_key = self.momentum * self.keys[idx] + (1.0 - self.momentum) * c_col
+                    mem_val = c_col
+                    for layer in self.mem_mlp:
+                        mem_val = F.silu(layer(mem_val))
+                    new_val = self.momentum * self.values[idx] + (1.0 - self.momentum) * mem_val
+                    self.keys.data[idx] = new_key
+                    self.values.data[idx] = new_val
+                    self.usage[idx] += 1
         else:
             if surprise > self.surprise_threshold:
                 idx = scores.argmax().item()
                 with torch.no_grad():
                     new_key = (
-                        self.momentum * self.keys[idx]
-                        + (1.0 - self.momentum) * c_col.detach()
+                        self.momentum * self.keys[idx] + (1.0 - self.momentum) * c_col.detach()
                     )
                     mem_val = c_col.detach()
                     for layer in self.mem_mlp:
                         mem_val = F.silu(layer(mem_val))
-                    new_val = (
-                        self.momentum * self.values[idx]
-                        + (1.0 - self.momentum) * mem_val
-                    )
-                self.keys.data[idx] = new_key
-                self.values.data[idx] = new_val
-                self.usage[idx] += 1
+                    new_val = self.momentum * self.values[idx] + (1.0 - self.momentum) * mem_val
+                    self.keys.data[idx] = new_key
+                    self.values.data[idx] = new_val
+                    self.usage[idx] += 1
 
         memory_context = torch.matmul(scores, self.values)
         enriched = col_repr + self.read_proj(memory_context).unsqueeze(0)
@@ -360,15 +339,13 @@ class ColumnProcessor(nn.Module):
         self.config = config
 
         cfg = config.griffin
-        self.token_embed = TokenEmbedding(
-            config.alphabet_size, config.pad_idx, cfg.d_model
-        )
+        self.token_embed = TokenEmbedding(config.alphabet_size, config.pad_idx, cfg.d_model)
 
         pattern = cfg.pattern
         self.layers = nn.ModuleList()
         pattern_idx = 0
-        for i in range(cfg.n_layers):
-            is_recurrent = (pattern_idx < pattern[0])
+        for _i in range(cfg.n_layers):
+            is_recurrent = pattern_idx < pattern[0]
             self.layers.append(
                 GriffinLayer(
                     d_model=cfg.d_model,
@@ -418,16 +395,13 @@ class ColumnProcessor(nn.Module):
     def forward_hidden(
         self,
         msa: torch.LongTensor,
-        mask: Optional[torch.BoolTensor] = None,
+        mask: torch.BoolTensor | None = None,
     ) -> torch.Tensor:
         if msa.ndim == 3:
             B, N, L = msa.shape
             msa = msa.view(B * N, L)
-            batched = True
-            store_shape = (B, N, L)
         elif msa.ndim == 2:
             N, L = msa.shape
-            batched = False
         else:
             raise ValueError(f"Expected 2D or 3D MSA, got {msa.ndim}D")
 
@@ -438,8 +412,6 @@ class ColumnProcessor(nn.Module):
             mask = mask.view(-1, L)
 
         x = self.token_embed(msa)
-
-        self.titans.reset_state()
 
         if self._compiled:
             x = self.layers(x, mask)
@@ -454,12 +426,11 @@ class ColumnProcessor(nn.Module):
     def forward(
         self,
         msa: torch.LongTensor,
-        mask: Optional[torch.BoolTensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        mask: torch.BoolTensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         if msa.ndim == 3:
             B, N, L = msa.shape
             batched = True
-            store_shape = (B, N, L)
         elif msa.ndim == 2:
             batched = False
             N, L = msa.shape

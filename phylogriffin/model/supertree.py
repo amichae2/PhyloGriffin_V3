@@ -3,18 +3,20 @@ PhyloGriffin v3 -- Stage E: Learned Supertree Reconciler.
 Combines K subtrees into one global tree using a Transformer.
 """
 
+import math
+from collections import defaultdict
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-import numpy as np
-from typing import List, Tuple, Dict, Optional
-from collections import defaultdict
 
 from ..config import PhyloGriffinConfig
 from ..tree_utils import (
-    parse_newick, tree_to_newick, newick_to_splits,
-    get_leaf_order, splits_to_newick, TreeNode
+    TreeNode,
+    get_leaf_order,
+    newick_to_splits,
+    parse_newick,
+    tree_to_newick,
 )
 
 D_TREE = 256
@@ -26,8 +28,9 @@ def _sinusoidal_encoding(depths: torch.Tensor, d_model: int) -> torch.Tensor:
     device = depths.device
     pe = torch.zeros(K, d_model, device=device)
     position = depths.unsqueeze(1)
-    div_term = torch.exp(torch.arange(0, d_model, 2, device=device).float() *
-                         (-math.log(10000.0) / d_model))
+    div_term = torch.exp(
+        torch.arange(0, d_model, 2, device=device).float() * (-math.log(10000.0) / d_model)
+    )
     pe[:, 0::2] = torch.sin(position * div_term)
     pe[:, 1::2] = torch.cos(position * div_term)
     return pe
@@ -35,7 +38,7 @@ def _sinusoidal_encoding(depths: torch.Tensor, d_model: int) -> torch.Tensor:
 
 def _compute_guide_depths(guide_tree_newick: str, K: int) -> torch.Tensor:
     tree = parse_newick(guide_tree_newick)
-    depths: Dict[int, int] = {}
+    depths: dict[int, int] = {}
 
     def _dfs(node: TreeNode, depth: int):
         if node.is_leaf:
@@ -47,12 +50,11 @@ def _compute_guide_depths(guide_tree_newick: str, K: int) -> torch.Tensor:
     return torch.tensor([depths.get(i, 0) for i in range(K)], dtype=torch.float32)
 
 
-def _guide_adjacency_mask(guide_tree_newick: str, K: int) -> Optional[torch.Tensor]:
+def _guide_adjacency_mask(guide_tree_newick: str, K: int) -> torch.Tensor | None:
     return None
 
 
 class TreeLSTM(nn.Module):
-
     def __init__(self, d_input: int, d_hidden: int):
         super().__init__()
         self.d_input = d_input
@@ -73,7 +75,7 @@ class TreeLSTM(nn.Module):
         h, _, _ = self._forward_recursive(tree)
         return h
 
-    def _forward_recursive(self, node: TreeNode) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _forward_recursive(self, node: TreeNode) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         device = next(self.parameters()).device
 
         if node.is_leaf:
@@ -109,7 +111,6 @@ class TreeLSTM(nn.Module):
 
 
 class TransformerLayer(nn.Module):
-
     def __init__(self, d_model: int, n_heads: int, d_feedforward: int, dropout: float):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
@@ -122,7 +123,7 @@ class TransformerLayer(nn.Module):
         )
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         x_in = x.unsqueeze(0)
         attn_out, _ = self.self_attn(x_in, x_in, x_in, attn_mask=mask)
         x = x + attn_out.squeeze(0)
@@ -161,10 +162,12 @@ class SupertreeReconciler(nn.Module):
 
         self.leaf_feature_proj = nn.Linear(gc.d_model, self.d_leaf)
 
-        self.transformer_layers = nn.ModuleList([
-            TransformerLayer(self.d_supertree, sc.n_heads, sc.d_feedforward, sc.dropout)
-            for _ in range(sc.n_layers)
-        ])
+        self.transformer_layers = nn.ModuleList(
+            [
+                TransformerLayer(self.d_supertree, sc.n_heads, sc.d_feedforward, sc.dropout)
+                for _ in range(sc.n_layers)
+            ]
+        )
 
         self.scale_mlp = nn.Sequential(
             nn.Linear(self.d_supertree, self.d_supertree // 2),
@@ -188,13 +191,13 @@ class SupertreeReconciler(nn.Module):
 
     def forward(
         self,
-        subtrees: List[Tuple[torch.Tensor, str]],
+        subtrees: list[tuple[torch.Tensor, str]],
         guide_tree_newick: str,
         global_embeddings: torch.Tensor,
     ) -> str:
         K = len(subtrees)
         device = global_embeddings.device
-        d_model = global_embeddings.shape[1]
+        global_embeddings.shape[1]
 
         leaf_features = self._compute_leaf_features(subtrees, global_embeddings)
 
@@ -204,20 +207,24 @@ class SupertreeReconciler(nn.Module):
         max_size = max(len(indices) for indices, _ in subtrees)
 
         tokens = []
-        for k, (leaf_indices, subtree_newick) in enumerate(subtrees):
+        for _k, (leaf_indices, subtree_newick) in enumerate(subtrees):
             sub_emb = global_embeddings[leaf_indices].mean(dim=0)
             tree_enc = self._encode_tree_structure(subtree_newick)
             quality = self._estimate_quality(subtree_newick, sub_emb)
-            size_norm = torch.tensor(len(leaf_indices) / max(max_size, 1),
-                                     dtype=torch.float32, device=device)
+            size_norm = torch.tensor(
+                len(leaf_indices) / max(max_size, 1), dtype=torch.float32, device=device
+            )
 
             emb_proj = self.sub_emb_proj(sub_emb)
             tree_proj = self.tree_enc_proj(tree_enc)
-            combined = torch.cat([
-                emb_proj, tree_proj,
-                quality.unsqueeze(0),
-                size_norm.unsqueeze(0),
-            ])
+            combined = torch.cat(
+                [
+                    emb_proj,
+                    tree_proj,
+                    quality.unsqueeze(0),
+                    size_norm.unsqueeze(0),
+                ]
+            )
             token = self.token_proj(combined)
             tokens.append(token)
 
@@ -237,7 +244,7 @@ class SupertreeReconciler(nn.Module):
 
         stay_probs = torch.zeros(global_embeddings.shape[0], device=device)
         for k, (leaf_indices, _) in enumerate(subtrees):
-            for local_idx, global_idx in enumerate(leaf_indices):
+            for _local_idx, global_idx in enumerate(leaf_indices):
                 gi = global_idx.item()
                 lf = leaf_features[gi]
                 si = torch.cat([x[k], lf])
@@ -271,10 +278,9 @@ class SupertreeReconciler(nn.Module):
         features = []
         for mask, blen in splits[:64]:
             leaf_ratio = float(mask.sum()) / max(n_leaves, 1)
-            features.append(torch.tensor(
-                [leaf_ratio, min(blen, 5.0), 0.0],
-                dtype=torch.float32, device=device
-            ))
+            features.append(
+                torch.tensor([leaf_ratio, min(blen, 5.0), 0.0], dtype=torch.float32, device=device)
+            )
 
         if not features:
             return torch.zeros(self.d_tree, device=device)
@@ -294,8 +300,8 @@ class SupertreeReconciler(nn.Module):
                 return 1
             return sum(_count_leaves(c) for c in node.children)
 
-        def _get_branch_lengths(node: TreeNode) -> List[float]:
-            bls: List[float] = []
+        def _get_branch_lengths(node: TreeNode) -> list[float]:
+            bls: list[float] = []
             for child in node.children:
                 bls.append(abs(child.branch_length))
                 bls.extend(_get_branch_lengths(child))
@@ -303,8 +309,9 @@ class SupertreeReconciler(nn.Module):
 
         branch_lengths = _get_branch_lengths(tree)
         if branch_lengths:
-            mean_bl = torch.tensor(sum(branch_lengths) / len(branch_lengths),
-                                   dtype=torch.float32, device=device)
+            mean_bl = torch.tensor(
+                sum(branch_lengths) / len(branch_lengths), dtype=torch.float32, device=device
+            )
         else:
             mean_bl = torch.tensor(1.0, dtype=torch.float32, device=device)
 
@@ -312,24 +319,23 @@ class SupertreeReconciler(nn.Module):
 
     def _compute_leaf_features(
         self,
-        subtrees: List[Tuple[torch.Tensor, str]],
+        subtrees: list[tuple[torch.Tensor, str]],
         global_embeddings: torch.Tensor,
     ) -> torch.Tensor:
         return self.leaf_feature_proj(global_embeddings)
 
     def _reconcile(
         self,
-        subtrees: List[Tuple[torch.Tensor, str]],
+        subtrees: list[tuple[torch.Tensor, str]],
         branch_scales: torch.Tensor,
         stay_probs: torch.Tensor,
         affinity_scores: torch.Tensor,
         guide_tree_newick: str,
     ) -> str:
         K = len(subtrees)
-        device = branch_scales.device
 
-        scaled_trees: List[TreeNode] = []
-        leaf_to_info: Dict[int, Tuple[int, str]] = {}
+        scaled_trees: list[TreeNode] = []
+        global_idx_to_subtree: dict[int, int] = {}
 
         for k, (leaf_indices, subtree_newick) in enumerate(subtrees):
             tree = parse_newick(subtree_newick)
@@ -337,24 +343,36 @@ class SupertreeReconciler(nn.Module):
             scaled_trees.append(tree)
 
             leaves = get_leaf_order(subtree_newick)
-            for local_i, name in enumerate(leaves):
-                if local_i < len(leaf_indices):
-                    leaf_to_info[leaf_indices[local_i].item()] = (k, name)
+            g_indices = leaf_indices.tolist()
 
-        migrated: Dict[int, List[str]] = defaultdict(list)
-        for global_idx, (from_k, leaf_name) in leaf_to_info.items():
+            def _tag_leaves(node: TreeNode, leaf_names, global_idx_list, subtree_k):
+                if node.is_leaf:
+                    for local_i, name in enumerate(leaf_names):
+                        if node.name == name and local_i < len(global_idx_list):
+                            node.leaf_global_idx = global_idx_list[local_i]
+                            global_idx_to_subtree[global_idx_list[local_i]] = subtree_k
+                            break
+                else:
+                    for child in node.children:
+                        _tag_leaves(child, leaf_names, global_idx_list, subtree_k)
+
+            _tag_leaves(tree, leaves, g_indices, k)
+
+        migrated: dict[int, list[int]] = defaultdict(list)
+        for global_idx, from_k in list(global_idx_to_subtree.items()):
             if global_idx < len(stay_probs) and stay_probs[global_idx].item() < 0.5:
                 scores = affinity_scores[from_k].clone()
-                scores[from_k] = -float('inf')
+                scores[from_k] = -float("inf")
                 dest = int(scores.argmax().item())
-                migrated[dest].append(leaf_name)
+                migrated[dest].append(global_idx)
 
-                self._remove_leaf_from_tree(scaled_trees[from_k], leaf_name)
+                self._remove_leaf_from_tree(scaled_trees[from_k], global_idx)
 
-        for dest_k, leaf_names in migrated.items():
+        for dest_k, global_idx_list in migrated.items():
             if dest_k < K:
-                for name in leaf_names:
-                    new_leaf = TreeNode(name=name, is_leaf=True, branch_length=0.1)
+                for gi in global_idx_list:
+                    new_leaf = TreeNode(name=f"leaf_{gi}", is_leaf=True, branch_length=0.1)
+                    new_leaf.leaf_global_idx = gi
                     scaled_trees[dest_k].children.append(new_leaf)
 
         guide_tree = parse_newick(guide_tree_newick)
@@ -368,13 +386,13 @@ class SupertreeReconciler(nn.Module):
         for child in tree.children:
             self._scale_branch_lengths(child, scale)
 
-    def _remove_leaf_from_tree(self, tree: TreeNode, leaf_name: str) -> bool:
+    def _remove_leaf_from_tree(self, tree: TreeNode, global_idx: int) -> bool:
         for i, child in enumerate(tree.children):
-            if child.is_leaf and child.name == leaf_name:
+            if child.is_leaf and child.leaf_global_idx == global_idx:
                 tree.children.pop(i)
                 return True
             elif not child.is_leaf:
-                if self._remove_leaf_from_tree(child, leaf_name):
+                if self._remove_leaf_from_tree(child, global_idx):
                     if len(child.children) == 0:
                         for j, c in enumerate(tree.children):
                             if c is child:
@@ -393,8 +411,8 @@ class SupertreeReconciler(nn.Module):
     def _graft_onto_guide(
         self,
         guide_node: TreeNode,
-        subtrees: List[TreeNode],
-        counter: List[int],
+        subtrees: list[TreeNode],
+        counter: list[int],
     ) -> TreeNode:
         if guide_node.is_leaf:
             k = counter[0]
@@ -414,7 +432,7 @@ class SupertreeReconciler(nn.Module):
             new_node.children.append(grafted)
         return new_node
 
-    def compute_loss(self, intermediates, true_tree_newick, n_leaves, device):
+    def compute_loss(self, intermediates, true_tree_newick, subtrees, n_leaves, device):
         branch_scales = intermediates["branch_scales"]
         loss_scale = F.mse_loss(branch_scales, torch.ones_like(branch_scales))
 
@@ -422,9 +440,8 @@ class SupertreeReconciler(nn.Module):
         loss_symmetry = F.mse_loss(affinity, affinity.t())
 
         stay_probs = intermediates["stay_probs"]
-        loss_stay = F.binary_cross_entropy(
-            stay_probs.clamp(1e-6, 1 - 1e-6),
-            torch.ones_like(stay_probs)
-        )
+        p = stay_probs.clamp(1e-6, 1 - 1e-6)
+        entropy = -(p * p.log() + (1 - p) * (1 - p).log()).mean()
+        loss_stay = -0.01 * entropy
 
         return loss_scale + 0.1 * loss_symmetry + 0.1 * loss_stay

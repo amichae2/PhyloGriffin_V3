@@ -3,25 +3,30 @@ PhyloGriffin v3 -- Train-1: Masked Column Reconstruction.
 Self-supervised pre-training of the Griffin column processor.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-import math
-from typing import Optional
 
 from ..config import PhyloGriffinConfig
 
+if TYPE_CHECKING:
+    from ..model.column_processor import ColumnProcessor
+
 
 def train_column_reconstruction(
-    model: "ColumnProcessor",
+    model: ColumnProcessor,
     dataloader: DataLoader,
     config: PhyloGriffinConfig,
     device: str = "cuda",
-) -> "ColumnProcessor":
+) -> ColumnProcessor:
     model = model.to(device)
     model.train()
 
@@ -31,15 +36,21 @@ def train_column_reconstruction(
     mask_head = nn.Linear(config.griffin.d_model, alphabet_size).to(device)
 
     params = list(model.parameters()) + list(mask_head.parameters())
-    optimizer = AdamW(params, lr=config.training.learning_rate,
-                      weight_decay=config.training.weight_decay)
+    optimizer = AdamW(
+        params, lr=config.training.learning_rate, weight_decay=config.training.weight_decay
+    )
 
-    warmup_scheduler = LinearLR(optimizer, start_factor=0.01, total_iters=config.training.warmup_steps)
+    warmup_scheduler = LinearLR(
+        optimizer, start_factor=0.01, total_iters=config.training.warmup_steps
+    )
     cosine_scheduler = CosineAnnealingLR(
         optimizer, T_max=config.training.max_steps - config.training.warmup_steps
     )
-    scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
-                             milestones=[config.training.warmup_steps])
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[config.training.warmup_steps],
+    )
 
     global_step = 0
     running_loss = 0.0
@@ -60,7 +71,9 @@ def train_column_reconstruction(
             mask_positions = mask_positions & mask
 
             replace_with_mask = torch.rand(B, N, L, device=device) < 0.8
-            replace_with_random = (torch.rand(B, N, L, device=device) >= 0.8) & (torch.rand(B, N, L, device=device) < 0.9)
+            replace_with_random = (torch.rand(B, N, L, device=device) >= 0.8) & (
+                torch.rand(B, N, L, device=device) < 0.9
+            )
 
             for b in range(B):
                 mask_pos = mask_positions[b]
@@ -91,7 +104,9 @@ def train_column_reconstruction(
             scheduler.step()
 
             running_loss = 0.9 * running_loss + 0.1 * loss.item()
-            pbar.set_postfix({"loss": f"{running_loss:.4f}", "lr": f"{scheduler.get_last_lr()[0]:.2e}"})
+            pbar.set_postfix(
+                {"loss": f"{running_loss:.4f}", "lr": f"{scheduler.get_last_lr()[0]:.2e}"}
+            )
             pbar.update(1)
             global_step += 1
 

@@ -5,12 +5,10 @@ Train the transformer that stitches subtrees together.
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-from typing import Optional, List
 
 from ..config import PhyloGriffinConfig
 
@@ -36,8 +34,7 @@ def train_supertree(
     supertree = supertree.to(device)
     supertree.train()
 
-    optimizer = AdamW(supertree.parameters(), lr=1e-4,
-                      weight_decay=config.training.weight_decay)
+    optimizer = AdamW(supertree.parameters(), lr=1e-4, weight_decay=config.training.weight_decay)
     max_steps = 30000
     scheduler = CosineAnnealingLR(optimizer, T_max=max_steps)
 
@@ -74,10 +71,9 @@ def train_supertree(
             with torch.no_grad():
                 seq_emb, _ = column_processor(msa, mask)
 
-            from ..tree_utils import newick_to_splits, get_leaf_order, parse_newick, tree_to_newick
-            from ..decomposition import HierarchicalDecomposition
+            from ..tree_utils import get_leaf_order
 
-            leaf_order = get_leaf_order(true_tree)
+            get_leaf_order(true_tree)
             n_leaves = N
 
             K = max(2, n_leaves // config.decomposition.max_subproblem_size)
@@ -92,24 +88,25 @@ def train_supertree(
                     end = start + chunk_size if k < K - 1 else N
                     chunk_indices = indices[start:end]
                     chunk_msa = msa[chunk_indices]
-                    chunk_mask = mask[chunk_indices]
+                    mask[chunk_indices]
                     chunk_emb = seq_emb[chunk_indices]
                     with torch.no_grad():
                         try:
                             chunk_tree = diffusion.generate(chunk_msa, chunk_emb)
                         except Exception:
-                            chunk_tree = f"({','.join(f'leaf_{i}:0.1' for i in range(len(chunk_indices)))});"
+                            chunk_tree = (
+                                f"({','.join(f'leaf_{i}:0.1' for i in range(len(chunk_indices)))});"
+                            )
                     subtrees.append((chunk_indices, chunk_tree))
 
             try:
                 reconciled, intermediates = supertree(subtrees, guide_tree, seq_emb)
             except Exception:
-                reconciled = true_tree
                 intermediates = None
 
             if intermediates is not None:
                 try:
-                    loss = supertree.compute_loss(intermediates, true_tree, N, device)
+                    loss = supertree.compute_loss(intermediates, true_tree, subtrees, N, device)
                 except Exception:
                     loss = torch.zeros(1, device=device, requires_grad=True)
             else:

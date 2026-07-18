@@ -3,19 +3,18 @@ PhyloGriffin v3 -- Inference Pipeline.
 Complete model wrapping all stages.
 """
 
+import warnings
+
 import torch
 import torch.nn as nn
-import math
-import warnings
-from typing import List, Tuple, Dict, Optional
 
 from .config import PhyloGriffinConfig
 from .model.column_processor import ColumnProcessor
-from .model.graph_predictor import GraphPredictor
 from .model.decomposition import HierarchicalDecomposition
 from .model.diffusion import DiffusionTreeGenerator
-from .model.supertree import SupertreeReconciler
+from .model.graph_predictor import GraphPredictor
 from .model.refinement import RefinementPass
+from .model.supertree import SupertreeReconciler
 
 
 class LayerSequenceWrapper(nn.Module):
@@ -55,11 +54,17 @@ class PhyloGriffinV3(nn.Module):
 
         self._compiled = False
 
-    def forward(self, msa: torch.Tensor, mask: Optional[torch.Tensor] = None,
-                seq_names: Optional[List[str]] = None, chunk_size: int = 5000) -> str:
+    def forward(
+        self,
+        msa: torch.Tensor,
+        mask: torch.Tensor | None = None,
+        seq_names: list[str] | None = None,
+        chunk_size: int = 5000,
+        device: str = None,
+    ) -> str:
         if seq_names is None:
             seq_names = [str(i) for i in range(msa.shape[0])]
-        return infer_tree(msa, seq_names, self.config, self, chunk_size=chunk_size)
+        return infer_tree(msa, seq_names, self.config, self, chunk_size=chunk_size, device=device)
 
     def compile(self, mode: str = "reduce-overhead", dynamic: bool = True) -> "PhyloGriffinV3":
         compile_model(self, mode=mode, dynamic=dynamic)
@@ -85,7 +90,8 @@ def compile_model(
     if not hasattr(torch, "compile"):
         warnings.warn(
             "torch.compile not available (requires PyTorch >= 2.0). "
-            "Skipping compilation. Performance will be significantly slower."
+            "Skipping compilation. Performance will be significantly slower.",
+            stacklevel=2,
         )
         return model
 
@@ -101,8 +107,9 @@ def compile_model(
             compiled_seq = torch.compile(wrapper, fullgraph=True, **compile_opts)
             processor.layers = compiled_seq
             processor._compiled = True
-            print(f"[compile_model] ColumnProcessor layers compiled "
-                  f"(mode={mode}, dynamic={dynamic})")
+            print(
+                f"[compile_model] ColumnProcessor layers compiled (mode={mode}, dynamic={dynamic})"
+            )
 
     if compile_diffusion and hasattr(model.diffusion, "denoiser"):
         denoiser = model.diffusion.denoiser
@@ -112,7 +119,7 @@ def compile_model(
     if compile_supertree:
         reconciler = model.supertree
         model.supertree = torch.compile(reconciler, fullgraph=False, **compile_opts)
-        print(f"[compile_model] Supertree reconciler compiled with fullgraph=False")
+        print("[compile_model] Supertree reconciler compiled with fullgraph=False")
 
     return model
 
@@ -120,12 +127,14 @@ def compile_model(
 @torch.no_grad()
 def infer_tree(
     msa: torch.Tensor,
-    seq_names: List[str],
+    seq_names: list[str],
     config: PhyloGriffinConfig,
     model: PhyloGriffinV3,
-    device: str = "cuda",
+    device: str = None,
     chunk_size: int = 5000,
 ) -> str:
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
     model.eval()
 
@@ -133,7 +142,7 @@ def infer_tree(
     msa = msa.to(device)
     pad_idx = config.pad_idx
 
-    mask = (msa != pad_idx)
+    mask = msa != pad_idx
 
     all_embeddings = []
     for chunk_start in range(0, N, chunk_size):
@@ -148,15 +157,13 @@ def infer_tree(
 
     edge_index, edge_weights = model.graph_predictor.build_graph(seq_embeddings)
 
-    subproblems, guide_tree = model.decomposition(
-        msa, seq_embeddings, edge_index, edge_weights
-    )
+    subproblems, guide_tree = model.decomposition(msa, seq_embeddings, edge_index, edge_weights)
 
     subtrees = []
-    for idxs, sub_msa, sub_emb in subproblems:
-        idxs = idxs.to(device)
-        sub_msa = sub_msa.to(device)
-        sub_emb = sub_emb.to(device)
+    for sp in subproblems:
+        idxs = sp["indices"].to(device)
+        sub_msa = sp["sub_msa"].to(device)
+        sub_emb = sp["sub_embeddings"].to(device)
         subtree = model.diffusion.generate(sub_msa, sub_emb)
         subtrees.append((idxs, subtree))
 

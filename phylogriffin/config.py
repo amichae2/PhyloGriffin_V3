@@ -4,8 +4,9 @@ All hyperparameters, constants, and paths live here.
 No other file defines magic numbers.
 """
 
+import os
 from dataclasses import dataclass, field
-from typing import Tuple, List, Optional, Dict, Any
+from typing import Any
 
 
 @dataclass
@@ -18,7 +19,7 @@ class GriffinConfig:
     local_window: int = 1024
     mlp_expansion: int = 3
     dropout: float = 0.1
-    pattern: Tuple[int, int] = (2, 1)
+    pattern: tuple[int, int] = (2, 1)
 
 
 @dataclass
@@ -34,7 +35,7 @@ class TitansConfig:
 class GraphConfig:
     k_neighbors: int = 50
     k_candidates: int = 200
-    predictor_hidden: List[int] = field(default_factory=lambda: [512, 256])
+    predictor_hidden: list[int] = field(default_factory=lambda: [512, 256])
     edge_threshold: float = 0.5
 
 
@@ -90,18 +91,27 @@ class TrainingConfig:
 @dataclass
 class SimulationConfig:
     """Configuration for structurally-realistic training data generation."""
-    pdb_cache_dir: str = "/content/drive/MyDrive/phylogriffin_data/pdb_cache"
+
+    pdb_cache_dir: str = field(
+        default_factory=lambda: os.path.join(
+            os.path.expanduser("~"), ".cache", "phylogriffin", "pdb_cache"
+        )
+    )
     n_backbones: int = 300
     pdb_resolution_max: float = 2.5
     pdb_length_min: int = 50
     pdb_length_max: int = 500
 
     mpnn_sequences_per_temp: int = 100
-    mpnn_temperatures: List[float] = field(default_factory=lambda: [0.2, 0.5])
+    mpnn_temperatures: list[float] = field(default_factory=lambda: [0.2, 0.5])
     mpnn_model_name: str = "v_48_020"
     mpnn_batch_size: int = 1
 
-    pregen_dir: str = "/content/drive/MyDrive/phylogriffin_data/pregen_fasta"
+    pregen_dir: str = field(
+        default_factory=lambda: os.path.join(
+            os.path.expanduser("~"), ".cache", "phylogriffin", "pregen_fasta"
+        )
+    )
 
     pyvolve_model: str = "JTT"
     pyvolve_alpha: float = 1.0
@@ -128,12 +138,13 @@ class PhyloGriffinConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         import dataclasses
+
         return dataclasses.asdict(self)
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "PhyloGriffinConfig":
+    def from_dict(cls, d: dict[str, Any]) -> "PhyloGriffinConfig":
         return cls(**d)
 
     @classmethod

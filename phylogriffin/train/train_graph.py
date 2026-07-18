@@ -6,11 +6,10 @@ Train the edge predictor for phylogenetic adjacency.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-from typing import Optional
 
 from ..config import PhyloGriffinConfig
 
@@ -30,8 +29,11 @@ def train_graph_predictor(
     graph_predictor = graph_predictor.to(device)
     graph_predictor.train()
 
-    optimizer = AdamW(graph_predictor.parameters(), lr=config.training.learning_rate,
-                      weight_decay=config.training.weight_decay)
+    optimizer = AdamW(
+        graph_predictor.parameters(),
+        lr=config.training.learning_rate,
+        weight_decay=config.training.weight_decay,
+    )
     max_steps = 20000
     scheduler = CosineAnnealingLR(optimizer, T_max=max_steps)
 
@@ -58,10 +60,14 @@ def train_graph_predictor(
                 n = (mask[b].sum(dim=1) > 0).sum().item()
                 emb = seq_emb[b, :n]
 
-                from ..tree_utils import parse_newick, get_leaf_order, patristic_distances, newick_to_splits
+                from ..tree_utils import (
+                    get_leaf_order,
+                    parse_newick,
+                    patristic_distances,
+                )
 
-                tree = parse_newick(tree_newick_list[b])
-                leaf_names = get_leaf_order(tree_newick_list[b])
+                parse_newick(tree_newick_list[b])
+                get_leaf_order(tree_newick_list[b])
 
                 if n < 3:
                     continue
@@ -72,13 +78,13 @@ def train_graph_predictor(
                 positive_pairs = []
                 negative_pairs = []
 
-                flat_d = dist_tensor.diagonal(offset=0).fill_(float("inf"))
+                dist_tensor.diagonal(offset=0).fill_(float("inf"))
                 flat = dist_tensor.flatten()
                 sorted_vals, sorted_idx = torch.sort(flat)
 
                 n_pairs_needed = min(100, n * (n - 1) // 2)
                 pos_candidates = sorted_idx[:n_pairs_needed]
-                neg_candidates = sorted_idx[-n_pairs_needed // 10:]
+                neg_candidates = sorted_idx[-n_pairs_needed // 10 :]
 
                 for idx in pos_candidates[:100].tolist():
                     i = idx // n
@@ -127,7 +133,9 @@ def train_graph_predictor(
 
                 optimizer.zero_grad()
                 total_loss.backward()
-                torch.nn.utils.clip_grad_norm_(graph_predictor.parameters(), config.training.grad_clip)
+                torch.nn.utils.clip_grad_norm_(
+                    graph_predictor.parameters(), config.training.grad_clip
+                )
                 optimizer.step()
                 scheduler.step()
 

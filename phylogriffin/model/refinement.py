@@ -7,15 +7,13 @@ and branch length prediction.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-from typing import List, Tuple, Set, Optional
 
 from ..config import PhyloGriffinConfig
 from ..tree_utils import (
     TreeNode,
+    get_leaf_order,
     parse_newick,
     tree_to_newick,
-    get_leaf_order,
 )
 
 
@@ -172,11 +170,16 @@ class RefinementPass(nn.Module):
                 quartet_metadata_list.append((a_set, b_set, c_set, d_set))
                 best_idx = scores.argmax(dim=-1).item()
 
-                if best_idx != 0 and scores[best_idx] > scores[0] + self.config.refinement.nni_margin:
+                if (
+                    best_idx != 0
+                    and scores[best_idx] > scores[0] + self.config.refinement.nni_margin
+                ):
                     self._apply_nni_swap(node, c1, c2, best_idx)
 
         intermediates = {
-            "quartet_scores": torch.stack(quartet_scores_list) if quartet_scores_list else torch.zeros(0, 3, device=seq_embeddings.device),
+            "quartet_scores": torch.stack(quartet_scores_list)
+            if quartet_scores_list
+            else torch.zeros(0, 3, device=seq_embeddings.device),
             "quartet_metadata": quartet_metadata_list,
             "leaf_to_idx": leaf_to_idx,
         }
@@ -191,11 +194,11 @@ class RefinementPass(nn.Module):
     ) -> torch.Tensor:
         return self.quartet_scorer(emb_a, emb_b, emb_c, emb_d)
 
-    def _get_internal_nodes(self, tree: TreeNode) -> List[Tuple]:
+    def _get_internal_nodes(self, tree: TreeNode) -> list[tuple]:
         leaf_names = get_leaf_order(tree_to_newick(tree))
         leaf_to_idx = {name: i for i, name in enumerate(leaf_names)}
 
-        def _get_leaves(node: TreeNode) -> Set[int]:
+        def _get_leaves(node: TreeNode) -> set[int]:
             if node.is_leaf:
                 if node.name in leaf_to_idx:
                     return {leaf_to_idx[node.name]}
@@ -273,9 +276,9 @@ class RefinementPass(nn.Module):
 
         targets = []
         for a_set, b_set, c_set, d_set in quartet_metadata:
-            targets.append(_determine_quartet_topology(
-                true_tree, a_set, b_set, c_set, d_set, leaf_to_idx
-            ))
+            targets.append(
+                _determine_quartet_topology(true_tree, a_set, b_set, c_set, d_set, leaf_to_idx)
+            )
 
         target = torch.tensor(targets, dtype=torch.long, device=quartet_scores.device)
         return F.cross_entropy(quartet_scores, target)

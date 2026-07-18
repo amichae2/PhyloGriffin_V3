@@ -4,11 +4,12 @@ Generates a phylogenetic tree via denoising diffusion modelled on continuous spl
 """
 
 import math
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, List, Optional, Dict
+
 from ..config import PhyloGriffinConfig
 from ..tree_utils import splits_to_newick
 
@@ -48,32 +49,38 @@ class DenoiserGNN(nn.Module):
         self.leaf_init_proj = nn.Linear(self.d_model + 1 + self.d_time, self.d_hidden)
         self.split_init_proj = nn.Linear(1 + self.d_hidden + self.d_time, self.d_hidden)
 
-        self.msg_l2s = nn.ModuleList([
-            nn.Linear(2 * self.d_hidden + 1, self.d_hidden) for _ in range(self.n_layers)
-        ])
-        self.msg_s2l = nn.ModuleList([
-            nn.Linear(2 * self.d_hidden + 1, self.d_hidden) for _ in range(self.n_layers)
-        ])
+        self.msg_l2s = nn.ModuleList(
+            [nn.Linear(2 * self.d_hidden + 1, self.d_hidden) for _ in range(self.n_layers)]
+        )
+        self.msg_s2l = nn.ModuleList(
+            [nn.Linear(2 * self.d_hidden + 1, self.d_hidden) for _ in range(self.n_layers)]
+        )
 
         self.norm_split_1 = nn.ModuleList([RMSNorm(self.d_hidden) for _ in range(self.n_layers)])
         self.norm_split_2 = nn.ModuleList([RMSNorm(self.d_hidden) for _ in range(self.n_layers)])
         self.norm_leaf_1 = nn.ModuleList([RMSNorm(self.d_hidden) for _ in range(self.n_layers)])
         self.norm_leaf_2 = nn.ModuleList([RMSNorm(self.d_hidden) for _ in range(self.n_layers)])
 
-        self.mlp_split = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(self.d_hidden, self.d_hidden * 4),
-                nn.ReLU(),
-                nn.Linear(self.d_hidden * 4, self.d_hidden),
-            ) for _ in range(self.n_layers)
-        ])
-        self.mlp_leaf = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(self.d_hidden, self.d_hidden * 4),
-                nn.ReLU(),
-                nn.Linear(self.d_hidden * 4, self.d_hidden),
-            ) for _ in range(self.n_layers)
-        ])
+        self.mlp_split = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self.d_hidden, self.d_hidden * 4),
+                    nn.ReLU(),
+                    nn.Linear(self.d_hidden * 4, self.d_hidden),
+                )
+                for _ in range(self.n_layers)
+            ]
+        )
+        self.mlp_leaf = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self.d_hidden, self.d_hidden * 4),
+                    nn.ReLU(),
+                    nn.Linear(self.d_hidden * 4, self.d_hidden),
+                )
+                for _ in range(self.n_layers)
+            ]
+        )
 
         self.eps_splits_net = nn.Sequential(
             nn.Linear(2 * self.d_hidden + 1, self.d_hidden),
@@ -99,47 +106,45 @@ class DenoiserGNN(nn.Module):
             nn.Linear(self.d_hidden, 1),
         )
 
-    def forward(self, splits, branch_lengths, pendant_lengths,
-                t_emb, seq_embeddings):
+    def forward(self, splits, branch_lengths, pendant_lengths, t_emb, seq_embeddings):
         M = seq_embeddings.shape[0]
         n_splits_max = splits.shape[1]
-        device = seq_embeddings.device
 
         t_leaf = t_emb.unsqueeze(0).expand(M, -1)
-        leaf_feat = torch.cat([
-            seq_embeddings,
-            pendant_lengths.unsqueeze(-1),
-            t_leaf,
-        ], dim=-1)
+        leaf_feat = torch.cat(
+            [
+                seq_embeddings,
+                pendant_lengths.unsqueeze(-1),
+                t_leaf,
+            ],
+            dim=-1,
+        )
         leaf_feat = self.leaf_init_proj(leaf_feat)
 
         weights = F.softmax(splits.abs(), dim=0)
         leaf_aggregate = torch.matmul(weights.T, leaf_feat)
 
         t_split = t_emb.unsqueeze(0).expand(n_splits_max, -1)
-        split_feat = torch.cat([
-            branch_lengths.unsqueeze(-1),
-            leaf_aggregate,
-            t_split,
-        ], dim=-1)
+        split_feat = torch.cat(
+            [
+                branch_lengths.unsqueeze(-1),
+                leaf_aggregate,
+                t_split,
+            ],
+            dim=-1,
+        )
         split_feat = self.split_init_proj(split_feat)
 
         for layer_idx in range(self.n_layers):
-            split_msg = self._leaf_to_split_message(
-                leaf_feat, split_feat, splits, layer_idx
-            )
+            split_msg = self._leaf_to_split_message(leaf_feat, split_feat, splits, layer_idx)
             split_feat = self.norm_split_1[layer_idx](split_feat + split_msg)
             split_feat = self.norm_split_2[layer_idx](
                 split_feat + self.mlp_split[layer_idx](split_feat)
             )
 
-            leaf_msg = self._split_to_leaf_message(
-                leaf_feat, split_feat, splits, layer_idx
-            )
+            leaf_msg = self._split_to_leaf_message(leaf_feat, split_feat, splits, layer_idx)
             leaf_feat = self.norm_leaf_1[layer_idx](leaf_feat + leaf_msg)
-            leaf_feat = self.norm_leaf_2[layer_idx](
-                leaf_feat + self.mlp_leaf[layer_idx](leaf_feat)
-            )
+            leaf_feat = self.norm_leaf_2[layer_idx](leaf_feat + self.mlp_leaf[layer_idx](leaf_feat))
 
         eps_splits = self._compute_eps_splits(leaf_feat, split_feat, splits)
         eps_branch = self.eps_branch_net(split_feat).squeeze(-1)
@@ -161,11 +166,14 @@ class DenoiserGNN(nn.Module):
             split_exp = split_feat[j_start:j_end].unsqueeze(0).expand(M, -1, d_hidden)
             splits_chunk = splits[:, j_start:j_end]
 
-            pair_feat = torch.cat([
-                leaf_exp,
-                split_exp,
-                splits_chunk.unsqueeze(-1),
-            ], dim=-1)
+            pair_feat = torch.cat(
+                [
+                    leaf_exp,
+                    split_exp,
+                    splits_chunk.unsqueeze(-1),
+                ],
+                dim=-1,
+            )
 
             msg = self.msg_l2s[layer_idx](pair_feat)
 
@@ -189,11 +197,14 @@ class DenoiserGNN(nn.Module):
             split_exp = split_feat[j_start:j_end].unsqueeze(0).expand(M, -1, d_hidden)
             splits_chunk = splits[:, j_start:j_end]
 
-            pair_feat = torch.cat([
-                leaf_exp,
-                split_exp,
-                splits_chunk.unsqueeze(-1),
-            ], dim=-1)
+            pair_feat = torch.cat(
+                [
+                    leaf_exp,
+                    split_exp,
+                    splits_chunk.unsqueeze(-1),
+                ],
+                dim=-1,
+            )
 
             msg = self.msg_s2l[layer_idx](pair_feat)
 
@@ -217,11 +228,14 @@ class DenoiserGNN(nn.Module):
             split_exp = split_feat[j_start:j_end].unsqueeze(0).expand(M, -1, d_hidden)
             splits_chunk = splits[:, j_start:j_end]
 
-            pair_feat = torch.cat([
-                leaf_exp,
-                split_exp,
-                splits_chunk.unsqueeze(-1),
-            ], dim=-1)
+            pair_feat = torch.cat(
+                [
+                    leaf_exp,
+                    split_exp,
+                    splits_chunk.unsqueeze(-1),
+                ],
+                dim=-1,
+            )
 
             out = self.eps_splits_net(pair_feat)
             eps_splits[:, j_start:j_end] = out.squeeze(-1)
@@ -262,8 +276,15 @@ class DiffusionTreeGenerator(nn.Module):
         emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
         return emb.squeeze(0)
 
-    def forward(self, sub_msa, sub_embeddings, true_splits=None,
-                true_branch_lengths=None, true_pendant_lengths=None, t=None):
+    def forward(
+        self,
+        sub_msa,
+        sub_embeddings,
+        true_splits=None,
+        true_branch_lengths=None,
+        true_pendant_lengths=None,
+        t=None,
+    ):
         M = sub_embeddings.shape[0]
         device = sub_embeddings.device
 
@@ -283,13 +304,15 @@ class DiffusionTreeGenerator(nn.Module):
 
         t_emb = self._time_embedding(t)
 
-        hat_eps_S, hat_eps_b, hat_eps_p = self.denoiser(
-            S_t, b_t, p_t, t_emb, sub_embeddings
-        )
+        hat_eps_S, hat_eps_b, hat_eps_p = self.denoiser(S_t, b_t, p_t, t_emb, sub_embeddings)
 
         return {
-            "eps_S": eps_S, "eps_b": eps_b, "eps_p": eps_p,
-            "hat_eps_S": hat_eps_S, "hat_eps_b": hat_eps_b, "hat_eps_p": hat_eps_p,
+            "eps_S": eps_S,
+            "eps_b": eps_b,
+            "eps_p": eps_p,
+            "hat_eps_S": hat_eps_S,
+            "hat_eps_b": hat_eps_b,
+            "hat_eps_p": hat_eps_p,
         }
 
     def _add_noise(self, S_0, b_0, p_0, t):
@@ -307,12 +330,12 @@ class DiffusionTreeGenerator(nn.Module):
 
         return S_t, b_t, p_t, eps_S, eps_b, eps_p
 
-    def _denoise(self, noisy_splits, noisy_branch_lengths, noisy_pendant_lengths,
-                 t, sub_embeddings):
+    def _denoise(
+        self, noisy_splits, noisy_branch_lengths, noisy_pendant_lengths, t, sub_embeddings
+    ):
         t_emb = self._time_embedding(t)
         return self.denoiser(
-            noisy_splits, noisy_branch_lengths, noisy_pendant_lengths,
-            t_emb, sub_embeddings
+            noisy_splits, noisy_branch_lengths, noisy_pendant_lengths, t_emb, sub_embeddings
         )
 
     @torch.no_grad()
@@ -371,7 +394,6 @@ class DiffusionTreeGenerator(nn.Module):
 
     def _discretize(self, splits_continuous, branch_lengths, pendant_lengths, leaf_names):
         M = splits_continuous.shape[0]
-        device = splits_continuous.device
         threshold = 0.05
 
         splits_np = splits_continuous.detach().cpu().numpy()
@@ -430,7 +452,6 @@ class DiffusionTreeGenerator(nn.Module):
 
     def _simple_nj(self, embeddings, leaf_names):
         M = embeddings.shape[0]
-        device = embeddings.device
 
         raw_dist = torch.cdist(embeddings, embeddings, p=2).cpu().numpy()
 

@@ -6,11 +6,10 @@ Train the denoising diffusion model for tree generation.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-from typing import Optional
 
 from ..config import PhyloGriffinConfig
 
@@ -30,8 +29,7 @@ def train_diffusion(
     diffusion = diffusion.to(device)
     diffusion.train()
 
-    optimizer = AdamW(diffusion.parameters(), lr=2e-4,
-                      weight_decay=config.training.weight_decay)
+    optimizer = AdamW(diffusion.parameters(), lr=2e-4, weight_decay=config.training.weight_decay)
     max_steps = 50000
     scheduler = CosineAnnealingLR(optimizer, T_max=max_steps)
 
@@ -62,7 +60,7 @@ def train_diffusion(
 
             seq_emb = seq_emb.squeeze(0) if seq_emb.dim() == 3 else seq_emb
 
-            from ..tree_utils import newick_to_splits, get_leaf_order
+            from ..tree_utils import get_leaf_order, newick_to_splits
 
             n_splits_max = config.diffusion.n_splits_max
             splits = newick_to_splits(true_tree, M)
@@ -73,10 +71,12 @@ def train_diffusion(
 
             for j, (mask, blen) in enumerate(splits[:n_splits_max]):
                 S_0[:, j] = torch.from_numpy(mask.astype(float) * 2 - 1).float().to(device)
-                b_0[j] = min(max(blen, config.diffusion.branch_length_min),
-                            config.diffusion.branch_length_max)
+                b_0[j] = min(
+                    max(blen, config.diffusion.branch_length_min),
+                    config.diffusion.branch_length_max,
+                )
 
-            leaf_names = get_leaf_order(true_tree)
+            get_leaf_order(true_tree)
             for i in range(M):
                 p_0[i] = 0.1
 
@@ -93,12 +93,10 @@ def train_diffusion(
 
             t_emb = diffusion._time_embedding(t).squeeze(0)
 
-            hat_eps_S, hat_eps_b, hat_eps_p = diffusion.denoiser(
-                S_t, b_t, p_t, t_emb, seq_emb
-            )
+            hat_eps_S, hat_eps_b, hat_eps_p = diffusion.denoiser(S_t, b_t, p_t, t_emb, seq_emb)
 
-            loss_S = F.mse_loss(hat_eps_S[:, :len(splits)], eps_S[:, :len(splits)])
-            loss_b = F.mse_loss(hat_eps_b[:len(splits)], eps_b[:len(splits)])
+            loss_S = F.mse_loss(hat_eps_S[:, : len(splits)], eps_S[:, : len(splits)])
+            loss_b = F.mse_loss(hat_eps_b[: len(splits)], eps_b[: len(splits)])
             loss_p = F.mse_loss(hat_eps_p, eps_p)
 
             loss = loss_S + loss_b + loss_p
