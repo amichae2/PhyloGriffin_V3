@@ -246,8 +246,8 @@ class PreGeneratedSubproblemDataset(PreGeneratedDataset):
         else:
             indices = torch.arange(N)
         return {
-            "sub_msa": msa,
-            "sub_mask": mask,
+            "msa": msa,
+            "mask": mask,
             "true_tree": result.get("tree_newick", ""),
             "leaf_indices": indices,
         }
@@ -503,23 +503,40 @@ class MaxTokensCollator:
                 shapes_match = all(t.shape == v_list[0].shape for t in v_list[1:])
                 if shapes_match:
                     out[k] = torch.stack(v_list)
-                else:
-                    padded_n = max_n
-                    if v_list[0].ndim == 2:
-                        padded = torch.zeros(len(v_list), padded_n, padded_n)
-                    elif v_list[0].ndim == 1:
-                        padded = torch.zeros(len(v_list), padded_n)
-                    else:
-                        padded = torch.zeros(len(v_list), padded_n, v_list[0].shape[-1])
+                    continue
+                padded_n = max_n
+                first = v_list[0]
+                if first.ndim == 2 and first.shape[0] == first.shape[1]:
+                    padded = torch.zeros(
+                        len(v_list), padded_n, padded_n, dtype=first.dtype, device=first.device
+                    )
                     for bi, t in enumerate(v_list):
                         tn = t.shape[0]
-                        if t.ndim == 2:
-                            padded[bi, :tn, :tn] = t
-                        elif t.ndim == 1:
-                            padded[bi, :tn] = t
-                        else:
-                            padded[bi, :tn] = t
-                    out[k] = padded
+                        padded[bi, :tn, :tn] = t
+                elif first.ndim == 2:
+                    D = first.shape[1]
+                    padded = torch.zeros(
+                        len(v_list), padded_n, D, dtype=first.dtype, device=first.device
+                    )
+                    for bi, t in enumerate(v_list):
+                        tn = t.shape[0]
+                        padded[bi, :tn] = t
+                elif first.ndim == 1:
+                    padded = torch.zeros(
+                        len(v_list), padded_n, dtype=first.dtype, device=first.device
+                    )
+                    for bi, t in enumerate(v_list):
+                        tn = t.shape[0]
+                        padded[bi, :tn] = t
+                else:
+                    extra_dims = first.shape[1:]
+                    padded = torch.zeros(
+                        len(v_list), padded_n, *extra_dims, dtype=first.dtype, device=first.device
+                    )
+                    for bi, t in enumerate(v_list):
+                        tn = t.shape[0]
+                        padded[bi, :tn] = t
+                out[k] = padded
             else:
                 out[k] = v_list
 

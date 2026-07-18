@@ -51,8 +51,8 @@ def train_diffusion(
             if global_step >= max_steps:
                 break
 
-            sub_msa = batch["sub_msa"].to(device)
-            sub_mask = batch["sub_mask"].to(device)
+            sub_msa = batch["msa"].to(device)
+            sub_mask = batch["mask"].to(device)
             true_tree = batch["true_tree"]
 
             if isinstance(true_tree, list):
