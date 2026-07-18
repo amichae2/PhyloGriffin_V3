@@ -197,7 +197,6 @@ class SupertreeReconciler(nn.Module):
     ) -> str:
         K = len(subtrees)
         device = global_embeddings.device
-        global_embeddings.shape[1]
 
         leaf_features = self._compute_leaf_features(subtrees, global_embeddings)
 

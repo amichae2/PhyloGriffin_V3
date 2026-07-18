@@ -110,29 +110,24 @@ def train_contrastive(
             if global_step >= max_steps:
                 break
 
-            if global_step < WARMUP_LOG_STEPS:
-                t_step_start = time.time()
-                t_data_start = time.time()
-            else:
-                t_data_start = time.time()
+            t_data_start = time.time()
 
             msa = batch["msa"].to(device)
             mask = batch["mask"].to(device)
             pairwise_dist = batch["pairwise_distances"].to(device)
 
+            data_time = time.time() - t_data_start
+
             if global_step < WARMUP_LOG_STEPS:
-                t_data_end = time.time()
-                data_time = t_data_end - t_data_start
                 logger.info(
-                    f"  Batch {global_step} received after {time.time() - t_first_fetch:.3f}s from first fetch"
+                    f"  Batch {global_step} received after "
+                    f"{time.time() - t_first_fetch:.3f}s from first fetch"
                 )
                 t_first_fetch = time.time()
                 logger.info(f"  Step {global_step}: data loading took {data_time:.3f}s")
                 logger.info(f"    msa shape: {msa.shape}, mask shape: {mask.shape}")
                 logger.info(f"    pairwise_dist shape: {pairwise_dist.shape}")
                 logger.info(f"    msa on device: {msa.device}")
-            else:
-                data_time = time.time() - t_data_start
 
             if global_step == 0:
                 logger.info("Dataset info (first batch):")
@@ -145,19 +140,15 @@ def train_contrastive(
 
             B, batch_N, batch_L = msa.shape
 
-            if global_step < WARMUP_LOG_STEPS:
-                t_forward_start = time.time()
-
+            t_forward_start = time.time()
             seq_emb, _ = model(msa, mask)
+            forward_time = time.time() - t_forward_start
 
             if global_step < WARMUP_LOG_STEPS:
-                t_forward_end = time.time()
-                forward_time = t_forward_end - t_forward_start
                 logger.info(f"  Step {global_step}: forward pass took {forward_time:.3f}s")
                 logger.info(f"    seq_emb shape: {seq_emb.shape}")
 
-            if global_step < WARMUP_LOG_STEPS:
-                t_loss_start = time.time()
+            t_loss_start = time.time()
 
             total_loss = torch.tensor(0.0, device=device)
             for b in range(B):
@@ -234,9 +225,9 @@ def train_contrastive(
 
             total_loss = total_loss / B
 
+            loss_time = time.time() - t_loss_start
+
             if global_step < WARMUP_LOG_STEPS:
-                t_loss_end = time.time()
-                loss_time = t_loss_end - t_loss_start
                 logger.info(f"  Step {global_step}: loss computation took {loss_time:.3f}s")
                 logger.info(f"    total_loss: {total_loss.item():.4f}")
 
@@ -252,25 +243,17 @@ def train_contrastive(
                 optimizer.zero_grad()
                 continue
 
-            if global_step < WARMUP_LOG_STEPS:
-                t_backward_start = time.time()
-
+            t_backward_start = time.time()
             optimizer.zero_grad()
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(params, config.training.grad_clip)
             optimizer.step()
             scheduler.step()
+            backward_time = time.time() - t_backward_start
 
             if global_step < WARMUP_LOG_STEPS:
-                t_backward_end = time.time()
-                backward_time = t_backward_end - t_backward_start
                 logger.info(f"  Step {global_step}: backward took {backward_time:.3f}s")
-            else:
-                backward_time = time.time() - t_backward_start
-
-            if global_step < WARMUP_LOG_STEPS:
-                t_step_end = time.time()
-                step_time = t_step_end - t_step_start
+                step_time = data_time + forward_time + loss_time + backward_time
                 step_timings.append(step_time)
                 logger.info(f"  Step {global_step}: total step time = {step_time:.3f}s")
                 logger.info(
