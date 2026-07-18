@@ -443,19 +443,35 @@ class ErrorTreeDataset(_MSATreeDataset):
 
 
 class MaxTokensCollator:
-    def __init__(self, config):
+    def __init__(self, config, truncate_sites: bool = True):
         self.pad_idx = config.pad_idx
         self.max_tokens = config.training.max_tokens_per_batch
+        self.truncate_sites = truncate_sites
 
     def __call__(self, batch):
-        batch = sorted(
-            batch, key=lambda item: item["msa"].shape[0] * item["msa"].shape[1], reverse=True
+        truncated_batch = []
+        for item in batch:
+            msa = item["msa"]
+            mask = item["mask"]
+            n, sites = msa.shape
+            tokens = n * sites
+            if tokens > self.max_tokens and self.truncate_sites and n > 0:
+                max_sites = max(1, self.max_tokens // n)
+                if max_sites < sites:
+                    msa = msa[:, :max_sites].contiguous()
+                    mask = mask[:, :max_sites].contiguous()
+            truncated_batch.append({**item, "msa": msa, "mask": mask})
+
+        truncated_batch = sorted(
+            truncated_batch,
+            key=lambda item: item["msa"].shape[0] * item["msa"].shape[1],
+            reverse=True,
         )
         kept = []
         total = 0
         max_n = 0
         max_sites = 0
-        for item in batch:
+        for item in truncated_batch:
             n, sites = item["msa"].shape
             tokens = n * sites
             if total + tokens > self.max_tokens and kept:
@@ -464,8 +480,10 @@ class MaxTokensCollator:
             total += tokens
             max_n = max(max_n, n)
             max_sites = max(max_sites, sites)
+
         padded_msa = []
         padded_mask = []
+        padded_extra: dict = {}
         for item in kept:
             n, sites = item["msa"].shape
             msa_pad = torch.full((max_n, max_sites), self.pad_idx, dtype=torch.long)
@@ -474,4 +492,35 @@ class MaxTokensCollator:
             mask_pad[:n, :sites] = item["mask"]
             padded_msa.append(msa_pad)
             padded_mask.append(mask_pad)
-        return {"msa": torch.stack(padded_msa), "mask": torch.stack(padded_mask)}
+            for k, v in item.items():
+                if k not in ("msa", "mask"):
+                    padded_extra.setdefault(k, []).append(v)
+
+        out = {"msa": torch.stack(padded_msa), "mask": torch.stack(padded_mask)}
+
+        for k, v_list in padded_extra.items():
+            if v_list and isinstance(v_list[0], torch.Tensor):
+                shapes_match = all(t.shape == v_list[0].shape for t in v_list[1:])
+                if shapes_match:
+                    out[k] = torch.stack(v_list)
+                else:
+                    padded_n = max_n
+                    if v_list[0].ndim == 2:
+                        padded = torch.zeros(len(v_list), padded_n, padded_n)
+                    elif v_list[0].ndim == 1:
+                        padded = torch.zeros(len(v_list), padded_n)
+                    else:
+                        padded = torch.zeros(len(v_list), padded_n, v_list[0].shape[-1])
+                    for bi, t in enumerate(v_list):
+                        tn = t.shape[0]
+                        if t.ndim == 2:
+                            padded[bi, :tn, :tn] = t
+                        elif t.ndim == 1:
+                            padded[bi, :tn] = t
+                        else:
+                            padded[bi, :tn] = t
+                    out[k] = padded
+            else:
+                out[k] = v_list
+
+        return out
