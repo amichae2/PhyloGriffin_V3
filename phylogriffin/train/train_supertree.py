@@ -5,6 +5,7 @@ Train the transformer that stitches subtrees together.
 
 import torch
 import torch.nn as nn
+from torch.amp import GradScaler
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
@@ -37,6 +38,9 @@ def train_supertree(
     optimizer = AdamW(supertree.parameters(), lr=1e-4, weight_decay=config.training.weight_decay)
     max_steps = 30000
     scheduler = CosineAnnealingLR(optimizer, T_max=max_steps)
+
+    use_amp = "cuda" in str(device)
+    scaler = GradScaler(enabled=use_amp)
 
     global_step = 0
     running_loss = 0.0
@@ -109,9 +113,11 @@ def train_supertree(
                 loss = torch.zeros(1, device=device, requires_grad=True)
 
             optimizer.zero_grad()
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(supertree.parameters(), config.training.grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             scheduler.step()
 
             running_loss = 0.9 * running_loss + 0.1 * loss.item()

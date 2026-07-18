@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
@@ -77,6 +78,14 @@ def train_contrastive(
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = AdamW(params, lr=1e-4, weight_decay=config.training.weight_decay)
 
+    use_amp = "cuda" in str(device)
+    scaler = GradScaler(enabled=use_amp)
+    amp_dtype = (
+        torch.bfloat16
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        else torch.float16
+    )
+
     warmup_steps = 500
     max_steps = 50000
     warmup = LinearLR(optimizer, start_factor=0.01, total_iters=warmup_steps)
@@ -141,7 +150,8 @@ def train_contrastive(
             B, batch_N, batch_L = msa.shape
 
             t_forward_start = time.time()
-            seq_emb, _ = model(msa, mask)
+            with autocast(device_type="cuda" if use_amp else "cpu", dtype=amp_dtype):
+                seq_emb, _ = model(msa, mask)
             forward_time = time.time() - t_forward_start
 
             if global_step < WARMUP_LOG_STEPS:
@@ -245,9 +255,11 @@ def train_contrastive(
 
             t_backward_start = time.time()
             optimizer.zero_grad()
-            total_loss.backward()
+            scaler.scale(total_loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(params, config.training.grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             scheduler.step()
             backward_time = time.time() - t_backward_start
 

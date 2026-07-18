@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
@@ -38,6 +39,14 @@ def train_column_reconstruction(
     params = list(model.parameters()) + list(mask_head.parameters())
     optimizer = AdamW(
         params, lr=config.training.learning_rate, weight_decay=config.training.weight_decay
+    )
+
+    use_amp = "cuda" in str(device)
+    scaler = GradScaler(enabled=use_amp)
+    amp_dtype = (
+        torch.bfloat16
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        else torch.float16
     )
 
     warmup_scheduler = LinearLR(
@@ -82,24 +91,25 @@ def train_column_reconstruction(
                     random_tokens = torch.randint(0, alphabet_size, (n_random,), device=device)
                     masked_msa[b][mask_pos & replace_with_random[b]] = random_tokens
 
-            hidden = model.forward_hidden(masked_msa, mask)
-
-            logits = mask_head(hidden).view(B, N, L, alphabet_size)
-
-            loss = F.cross_entropy(
-                logits[mask_positions].view(-1, alphabet_size),
-                msa[mask_positions].view(-1),
-                ignore_index=config.pad_idx,
-            )
+            with autocast(device_type="cuda" if use_amp else "cpu", dtype=amp_dtype):
+                hidden = model.forward_hidden(masked_msa, mask)
+                logits = mask_head(hidden).view(B, N, L, alphabet_size)
+                loss = F.cross_entropy(
+                    logits[mask_positions].view(-1, alphabet_size),
+                    msa[mask_positions].view(-1),
+                    ignore_index=config.pad_idx,
+                )
 
             if torch.isnan(loss) or torch.isinf(loss):
                 optimizer.zero_grad()
                 continue
 
             optimizer.zero_grad()
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(params, config.training.grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             scheduler.step()
 
             running_loss = 0.9 * running_loss + 0.1 * loss.item()

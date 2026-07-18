@@ -6,6 +6,7 @@ Train the edge predictor for phylogenetic adjacency.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.amp import GradScaler
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
@@ -36,6 +37,9 @@ def train_graph_predictor(
     )
     max_steps = 20000
     scheduler = CosineAnnealingLR(optimizer, T_max=max_steps)
+
+    use_amp = "cuda" in str(device)
+    scaler = GradScaler(enabled=use_amp)
 
     global_step = 0
     running_loss = 0.0
@@ -132,11 +136,13 @@ def train_graph_predictor(
                 total_loss = total_loss / B
 
                 optimizer.zero_grad()
-                total_loss.backward()
+                scaler.scale(total_loss).backward()
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
                     graph_predictor.parameters(), config.training.grad_clip
                 )
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 scheduler.step()
 
                 running_loss = 0.9 * running_loss + 0.1 * total_loss.item()

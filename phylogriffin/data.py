@@ -440,3 +440,38 @@ class ErrorTreeDataset(_MSATreeDataset):
             "mask": mask,
             "embeddings": torch.zeros(msa.shape[0], 256),
         }
+
+
+class MaxTokensCollator:
+    def __init__(self, config):
+        self.pad_idx = config.pad_idx
+        self.max_tokens = config.training.max_tokens_per_batch
+
+    def __call__(self, batch):
+        batch = sorted(
+            batch, key=lambda item: item["msa"].shape[0] * item["msa"].shape[1], reverse=True
+        )
+        kept = []
+        total = 0
+        max_n = 0
+        max_sites = 0
+        for item in batch:
+            n, sites = item["msa"].shape
+            tokens = n * sites
+            if total + tokens > self.max_tokens and kept:
+                break
+            kept.append(item)
+            total += tokens
+            max_n = max(max_n, n)
+            max_sites = max(max_sites, sites)
+        padded_msa = []
+        padded_mask = []
+        for item in kept:
+            n, sites = item["msa"].shape
+            msa_pad = torch.full((max_n, max_sites), self.pad_idx, dtype=torch.long)
+            mask_pad = torch.zeros(max_n, max_sites, dtype=torch.bool)
+            msa_pad[:n, :sites] = item["msa"]
+            mask_pad[:n, :sites] = item["mask"]
+            padded_msa.append(msa_pad)
+            padded_mask.append(mask_pad)
+        return {"msa": torch.stack(padded_msa), "mask": torch.stack(padded_mask)}

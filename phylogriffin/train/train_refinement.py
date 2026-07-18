@@ -5,6 +5,7 @@ Train the NNI-based tree refinement module.
 
 import torch
 import torch.nn as nn
+from torch.amp import GradScaler
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
@@ -29,6 +30,9 @@ def train_refinement(
     )
     max_steps = 10000
     scheduler = CosineAnnealingLR(optimizer, T_max=max_steps)
+
+    use_amp = "cuda" in str(device)
+    scaler = GradScaler(enabled=use_amp)
 
     global_step = 0
     running_loss = 0.0
@@ -71,9 +75,11 @@ def train_refinement(
                 loss = total_loss / valid_count
 
                 optimizer.zero_grad()
-                loss.backward()
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(refinement.parameters(), config.training.grad_clip)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 scheduler.step()
 
                 running_loss = 0.9 * running_loss + 0.1 * loss.item()

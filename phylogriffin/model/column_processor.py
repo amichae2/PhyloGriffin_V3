@@ -376,6 +376,10 @@ class ColumnProcessor(nn.Module):
 
         self._original_layers = self.layers
         self._compiled = False
+        self._use_gradient_checkpointing = False
+
+    def enable_gradient_checkpointing(self):
+        self._use_gradient_checkpointing = True
 
     def build_layer_sequence(self):
         self._original_layers = self.layers
@@ -416,6 +420,9 @@ class ColumnProcessor(nn.Module):
         if self._compiled:
             x = self.layers(x, mask)
             x = self._batched_titans(x, mask)
+        elif self._use_gradient_checkpointing and self.training:
+            for layer in self.layers:
+                x = torch.utils.checkpoint.checkpoint(layer, x, mask, use_reentrant=False)
         else:
             for layer in self.layers:
                 x = layer(x, mask)

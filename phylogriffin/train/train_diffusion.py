@@ -6,6 +6,7 @@ Train the denoising diffusion model for tree generation.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
@@ -32,6 +33,14 @@ def train_diffusion(
     optimizer = AdamW(diffusion.parameters(), lr=2e-4, weight_decay=config.training.weight_decay)
     max_steps = 50000
     scheduler = CosineAnnealingLR(optimizer, T_max=max_steps)
+
+    use_amp = "cuda" in str(device)
+    scaler = GradScaler(enabled=use_amp)
+    amp_dtype = (
+        torch.bfloat16
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        else torch.float16
+    )
 
     global_step = 0
     running_loss = 0.0
@@ -92,7 +101,8 @@ def train_diffusion(
 
             t_emb = diffusion._time_embedding(t).squeeze(0)
 
-            hat_eps_S, hat_eps_b, hat_eps_p = diffusion.denoiser(S_t, b_t, p_t, t_emb, seq_emb)
+            with autocast(device_type="cuda" if use_amp else "cpu", dtype=amp_dtype):
+                hat_eps_S, hat_eps_b, hat_eps_p = diffusion.denoiser(S_t, b_t, p_t, t_emb, seq_emb)
 
             loss_S = F.mse_loss(hat_eps_S[:, : len(splits)], eps_S[:, : len(splits)])
             loss_b = F.mse_loss(hat_eps_b[: len(splits)], eps_b[: len(splits)])
@@ -101,9 +111,11 @@ def train_diffusion(
             loss = loss_S + loss_b + loss_p
 
             optimizer.zero_grad()
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(diffusion.parameters(), config.training.grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             scheduler.step()
 
             running_loss = 0.9 * running_loss + 0.1 * loss.item()
