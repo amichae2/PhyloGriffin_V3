@@ -423,9 +423,11 @@ class ColumnProcessor(nn.Module):
         elif self._use_gradient_checkpointing and self.training:
             for layer in self.layers:
                 x = torch.utils.checkpoint.checkpoint(layer, x, mask, use_reentrant=False)
+            x = self._batched_titans(x, mask)
         else:
             for layer in self.layers:
                 x = layer(x, mask)
+            x = self._batched_titans(x, mask)
 
         x = self.final_norm(x)
         return x
