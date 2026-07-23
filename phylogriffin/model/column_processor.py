@@ -10,7 +10,7 @@ from ..config import PhyloGriffinConfig
 class TokenEmbedding(nn.Module):
     def __init__(self, alphabet_size: int, pad_idx: int, d_model: int):
         super().__init__()
-        self.embedding = nn.Embedding(alphabet_size + 1, d_model, padding_idx=pad_idx)
+        self.embedding = nn.Embedding(alphabet_size + 2, d_model, padding_idx=pad_idx)
 
     def forward(self, x: torch.LongTensor) -> torch.Tensor:
         return self.embedding(x)

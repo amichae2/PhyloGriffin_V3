@@ -32,7 +32,7 @@ def train_column_reconstruction(
     model.train()
 
     alphabet_size = config.alphabet_size
-    mask_token_idx = alphabet_size
+    mask_token_idx = config.alphabet_size + 1  # row 22 in embedding, distinct from pad_idx=21
 
     mask_head = nn.Linear(config.griffin.d_model, alphabet_size).to(device)
 
